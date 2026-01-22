@@ -1,6 +1,50 @@
 import Foundation
 import CoreLocation
 
+// MARK: - Start Phase Coaching
+
+/// Phases for the improved start coaching system
+enum StartPhase: String, Codable {
+    case setup = "SET LINE"           // No line set
+    case reachTo = "REACH TO"         // Far out, time to spare - sailing away from line
+    case turnBack = "TURN BACK"       // Reached far enough, time to head back
+    case hold = "HOLD"                // Good position, burning time
+    case slowTo = "SLOW TO"           // Too close, too fast
+    case build = "BUILD SPEED"        // Time to accelerate
+    case go = "GO!"                   // Final approach
+    case late = "LATE"                // Missed timing
+    case raceStarted = "RACE STARTED" // Timer went negative
+}
+
+/// Configuration for acceleration and speed parameters
+struct AccelerationConfig: Codable {
+    var timeToAccelerate: Double = 12.0    // seconds to reach target speed
+    var targetSpeed: Double = 5.0           // target crossing speed (knots)
+    var reachingSpeed: Double = 6.0         // typical reaching speed (knots)
+    var returnSpeed: Double = 5.0           // expected speed returning to line (knots)
+    var buffer: Double = 3.0                // safety buffer (seconds)
+
+    /// Calculate target reach distance based on available time
+    func targetReachDistance(availableTime: Double) -> Double {
+        guard availableTime > 0 else { return 0 }
+
+        // Time available for reaching maneuver (minus acceleration and buffer)
+        let reachTime = availableTime - timeToAccelerate - buffer
+        guard reachTime > 0 else { return 0 }
+
+        // Calculate distance: time / (1/reachSpeed + 1/returnSpeed) * safety factor
+        let reachSpeedMS = reachingSpeed / 1.94384  // knots to m/s
+        let returnSpeedMS = returnSpeed / 1.94384
+
+        // Time to travel X meters out and back = X/reachSpeed + X/returnSpeed
+        // So X = reachTime / (1/reachSpeed + 1/returnSpeed)
+        let distance = reachTime / (1/reachSpeedMS + 1/returnSpeedMS) * 0.8  // 80% safety factor
+        return max(0, distance)
+    }
+}
+
+// MARK: - Waypoint Model
+
 struct Waypoint: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String

@@ -5,14 +5,17 @@ import CoreLocation
 class WaypointStore: ObservableObject {
     @Published var waypoints: [Waypoint] = []
     @Published var courseSetup: CourseSetup = CourseSetup()
+    @Published var accelConfig: AccelerationConfig = AccelerationConfig()
 
     private let waypointsKey = "savedWaypoints"
     private let courseKey = "savedCourse"
+    private let accelConfigKey = "savedAccelConfig"
     private let parser = GPXParser()
 
     init() {
         loadWaypoints()
         loadCourseSetup()
+        loadAccelConfig()
     }
 
     // MARK: - Waypoint Management
@@ -222,6 +225,10 @@ class WaypointStore: ObservableObject {
         documentsURL.appendingPathComponent("course.json")
     }
 
+    private var accelConfigFileURL: URL {
+        documentsURL.appendingPathComponent("accelConfig.json")
+    }
+
     private func saveWaypoints() {
         do {
             let data = try JSONEncoder().encode(waypoints)
@@ -255,6 +262,31 @@ class WaypointStore: ObservableObject {
             courseSetup = try JSONDecoder().decode(CourseSetup.self, from: data)
         } catch {
             courseSetup = CourseSetup()
+        }
+    }
+
+    // MARK: - Acceleration Config
+
+    func updateAccelConfig(_ config: AccelerationConfig) {
+        accelConfig = config
+        saveAccelConfig()
+    }
+
+    private func saveAccelConfig() {
+        do {
+            let data = try JSONEncoder().encode(accelConfig)
+            try data.write(to: accelConfigFileURL)
+        } catch {
+            print("Failed to save accel config: \(error)")
+        }
+    }
+
+    private func loadAccelConfig() {
+        do {
+            let data = try Data(contentsOf: accelConfigFileURL)
+            accelConfig = try JSONDecoder().decode(AccelerationConfig.self, from: data)
+        } catch {
+            accelConfig = AccelerationConfig()
         }
     }
 }
