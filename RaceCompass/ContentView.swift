@@ -30,6 +30,13 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var timeToBurn: Double = 0.0
     @Published var startStrategy: String = "SET TIME"
 
+    // --- IMPROVED START COACHING ---
+    @Published var vmcToLine: Double = 0.0          // VMC toward closest point on line (knots)
+    @Published var timeToLineVMC: Double = 0.0      // Time to line at current VMC (seconds)
+    @Published var startPhase: StartPhase = .setup  // Current coaching phase
+    @Published var targetReachDistance: Double = 0.0 // How far to reach out (meters)
+    @Published var accelConfig = AccelerationConfig()
+
     // --- VMC & COURSE TRACKING ---
     @Published var courseMarks: [CLLocation] = []  // Ordered marks from course setup
     @Published var currentLeg: Int = 0             // 0 = pre-start, 1+ = racing legs
@@ -175,24 +182,27 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     // --- START COMPUTER (Using Date) ---
     func calculateLineStats() {
-        guard let userLoc = currentLocation, let boat = boatEnd, let pin = pinEnd else { return }
-        
+        guard let userLoc = currentLocation, let boat = boatEnd, let pin = pinEnd else {
+            startPhase = .setup
+            startStrategy = "SET LINE"
+            return
+        }
+
+        // Calculate distance to line
         let distMeters = distanceFromPointToLine(p: userLoc, a: pin, b: boat)
         self.distanceToLine = distMeters
-        
-        let targetSpeedKnots = sog < 1.0 ? 5.0 : sog
+
+        // Calculate VMC toward line (improved)
+        calculateVMCToLine()
+
+        // Legacy time-to-burn (for backward compatibility)
+        let targetSpeedKnots = sog < 1.0 ? accelConfig.targetSpeed : sog
         let speedMS = targetSpeedKnots / 1.94384
         let timeToTravel = distMeters / speedMS
-        
-        // Burn = (Seconds until Start) - (Time needed to get there)
         self.timeToBurn = secondsToStart - timeToTravel
-        
-        if secondsToStart < 0 { startStrategy = "RACE STARTED" }
-        else if timeToBurn > 60 { startStrategy = "REACH OUT" }
-        else if timeToBurn > 20 { startStrategy = "HOLD" }
-        else if timeToBurn > 5 { startStrategy = "ALIGN" }
-        else if timeToBurn > 0 { startStrategy = "GO! GO!" }
-        else { startStrategy = "LATE!" }
+
+        // Determine coaching phase (new system)
+        determineStartPhase()
     }
     
     func distanceFromPointToLine(p: CLLocation, a: CLLocation, b: CLLocation) -> Double {
@@ -207,6 +217,132 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         var nx: Double; var ny: Double
         if t < 0 { nx = ax; ny = ay } else if t > 1 { nx = bx; ny = by } else { nx = ax + t * dx; ny = ay + t * dy }
         return sqrt(pow(px - nx, 2) + pow(py - ny, 2))
+    }
+
+    /// Find the closest point on the start line segment to the user's position
+    func closestPointOnLine(p: CLLocation, a: CLLocation, b: CLLocation) -> CLLocation {
+        let scaleLat = 111139.0
+        let scaleLon = cos(p.coordinate.latitude * .pi / 180) * 111139.0
+        let px = p.coordinate.longitude * scaleLon; let py = p.coordinate.latitude * scaleLat
+        let ax = a.coordinate.longitude * scaleLon; let ay = a.coordinate.latitude * scaleLat
+        let bx = b.coordinate.longitude * scaleLon; let by = b.coordinate.latitude * scaleLat
+        let dx = bx - ax; let dy = by - ay
+        if dx == 0 && dy == 0 { return a }
+        let t = max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+        let nx = ax + t * dx; let ny = ay + t * dy
+        // Convert back to lat/lon
+        let lon = nx / scaleLon
+        let lat = ny / scaleLat
+        return CLLocation(latitude: lat, longitude: lon)
+    }
+
+    /// Calculate VMC toward the closest point on the start line
+    func calculateVMCToLine() {
+        guard let userLoc = currentLocation, let boat = boatEnd, let pin = pinEnd else {
+            vmcToLine = 0
+            timeToLineVMC = 0
+            return
+        }
+
+        // Find closest point on line
+        let closestPoint = closestPointOnLine(p: userLoc, a: pin, b: boat)
+
+        // Calculate bearing to closest point
+        let bearingToLine = bearing(from: userLoc, to: closestPoint)
+
+        // Calculate VMC = SOG × cos(angle difference)
+        let angleDiff = (cog - bearingToLine) * .pi / 180
+        vmcToLine = sog * cos(angleDiff)
+
+        // Calculate time to line at current VMC
+        let distMeters = distanceToLine
+        if vmcToLine > 0.1 {  // Moving toward line
+            let speedMS = vmcToLine / 1.94384  // knots to m/s
+            timeToLineVMC = distMeters / speedMS
+        } else if vmcToLine < -0.1 {  // Moving away from line
+            // Negative time indicates moving away
+            let speedMS = abs(vmcToLine) / 1.94384
+            timeToLineVMC = -(distMeters / speedMS)
+        } else {
+            timeToLineVMC = Double.infinity  // Parallel to line
+        }
+    }
+
+    /// Determine the current coaching phase based on position, speed, and timing
+    func determineStartPhase() {
+        guard boatEnd != nil, pinEnd != nil else {
+            startPhase = .setup
+            startStrategy = "SET LINE"
+            return
+        }
+
+        // Race has started
+        if secondsToStart < -60 {
+            startPhase = .raceStarted
+            startStrategy = "RACE STARTED"
+            return
+        }
+
+        // Calculate key values
+        let timeToLine = vmcToLine > 0.1 ? timeToLineVMC : Double.infinity
+        let isApproaching = vmcToLine > 0.1
+        let isReceding = vmcToLine < -0.1
+
+        // Time margin (how early/late we'd arrive at current VMC)
+        let arrivalMargin = secondsToStart - timeToLine
+
+        // Calculate target reach distance
+        targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart)
+
+        // State machine for coaching phases
+        if secondsToStart < 0 {
+            // After gun
+            if distanceToLine > 5 {
+                startPhase = .late
+                startStrategy = String(format: "LATE %.0fs", abs(secondsToStart))
+            } else {
+                startPhase = .go
+                startStrategy = "GO!"
+            }
+        } else if secondsToStart <= accelConfig.timeToAccelerate + accelConfig.buffer {
+            // Final approach phase - time to build speed and cross
+            if isApproaching && timeToLine < secondsToStart + 2 {
+                startPhase = .go
+                startStrategy = String(format: "GO! %.0fs", secondsToStart)
+            } else {
+                startPhase = .build
+                startStrategy = "BUILD SPEED"
+            }
+        } else if isApproaching && arrivalMargin < 0 {
+            // Would arrive late at current pace
+            startPhase = .build
+            startStrategy = "BUILD SPEED"
+        } else if isApproaching && arrivalMargin < accelConfig.timeToAccelerate {
+            // Approaching with about right timing
+            startPhase = .hold
+            startStrategy = String(format: "HOLD %.0fs", arrivalMargin)
+        } else if isApproaching && arrivalMargin > 30 && distanceToLine < 50 {
+            // Too close, too early - need to slow down
+            let targetSpeedKnots = max(1.0, distanceToLine / (secondsToStart - accelConfig.timeToAccelerate) * 1.94384)
+            startPhase = .slowTo
+            startStrategy = String(format: "SLOW TO %.1fkt", targetSpeedKnots)
+        } else if isReceding && distanceToLine > targetReachDistance * 0.9 {
+            // Reached far enough, time to turn back
+            startPhase = .turnBack
+            startStrategy = "TURN BACK"
+        } else if !isApproaching && secondsToStart > 60 && distanceToLine < targetReachDistance * 0.8 {
+            // Plenty of time, sail away to reach position
+            startPhase = .reachTo
+            startStrategy = String(format: "REACH TO %.0fm", targetReachDistance)
+        } else if isApproaching {
+            // Default approaching state - hold position
+            startPhase = .hold
+            startStrategy = String(format: "HOLD %.0fs", max(0, arrivalMargin))
+        } else {
+            // Not clearly approaching or receding - hold
+            startPhase = .hold
+            startStrategy = String(format: "HOLD %.0fs", max(0, secondsToStart - accelConfig.timeToAccelerate))
+        }
     }
     
     // --- BUTTON ACTIONS ---
@@ -393,6 +529,8 @@ struct ContentView: View {
                 }
                 // Load course marks for VMC calculations
                 compass.courseMarks = waypointStore.courseMarks.map { $0.location }
+                // Load acceleration config
+                compass.accelConfig = waypointStore.accelConfig
             }
         }
     }
@@ -576,7 +714,53 @@ struct StartView: View {
         let s = totalSeconds % 60
         return String(format: "%d:%02d", m, s)
     }
-    
+
+    // Color coding for coach message background
+    func coachBackgroundColor() -> Color {
+        switch compass.startPhase {
+        case .go:
+            return .green
+        case .late:
+            return .red
+        case .slowTo:
+            return .orange
+        case .build:
+            return .purple
+        case .turnBack:
+            return .orange
+        case .reachTo:
+            return .blue
+        case .hold:
+            return .blue
+        case .setup:
+            return .gray
+        case .raceStarted:
+            return .gray
+        }
+    }
+
+    // Format VMC to line with color indicator
+    func vmcToLineColor() -> Color {
+        if compass.vmcToLine > 0.5 {
+            return .green   // Approaching line
+        } else if compass.vmcToLine < -0.5 {
+            return .blue    // Moving away (reaching)
+        } else {
+            return .orange  // Parallel / slow
+        }
+    }
+
+    // Format ETA string
+    func etaString() -> String {
+        if compass.vmcToLine > 0.1 && compass.timeToLineVMC.isFinite && compass.timeToLineVMC > 0 {
+            return String(format: "%.0fs", compass.timeToLineVMC)
+        } else if compass.vmcToLine < -0.1 {
+            return "AWAY"
+        } else {
+            return "---"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             
@@ -624,40 +808,78 @@ struct StartView: View {
                 .lineLimit(1)
                 .frame(height: geometry.size.height * 0.25)
             
-            // 4. COACH MESSAGE (12% Height)
-            Text(compass.startStrategy)
-                .font(.system(size: geometry.size.height * 0.08, weight: .heavy))
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-                .frame(maxHeight: .infinity) // Fill the container
-                .background(compass.startStrategy.contains("GO") ? Color.green : (compass.startStrategy.contains("LATE") ? Color.red : Color.blue))
-                .cornerRadius(8)
-                .padding(.vertical, 2)
-                .frame(height: geometry.size.height * 0.12)
+            // 4. COACH MESSAGE (16% Height) - Enhanced two-line display
+            VStack(spacing: 2) {
+                // Primary message
+                Text(compass.startStrategy)
+                    .font(.system(size: geometry.size.height * 0.08, weight: .heavy))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                // Secondary info based on phase
+                Group {
+                    switch compass.startPhase {
+                    case .build, .go:
+                        // Show speed gauge during acceleration phases
+                        HStack(spacing: 8) {
+                            Text(String(format: "%.1f", compass.sog))
+                                .font(.system(size: geometry.size.height * 0.04, weight: .bold, design: .monospaced))
+                            Text("/")
+                                .font(.system(size: geometry.size.height * 0.03))
+                            Text(String(format: "%.1f kt", compass.accelConfig.targetSpeed))
+                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                        }
+                        .foregroundColor(compass.sog >= compass.accelConfig.targetSpeed * 0.9 ? .white : .white.opacity(0.7))
+                    case .hold, .slowTo:
+                        Text(String(format: "VMC: %.1f kt", compass.vmcToLine))
+                            .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                    case .reachTo:
+                        Text(String(format: "DIST: %.0fm", compass.distanceToLine))
+                            .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                    default:
+                        EmptyView()
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(coachBackgroundColor())
+            .cornerRadius(8)
+            .padding(.vertical, 2)
+            .frame(height: geometry.size.height * 0.16)
             
-            // 5. STATS ROW (12% Height)
+            // 5. STATS ROW (12% Height) - VMC→LINE, ETA, SOG
             HStack {
+                VStack {
+                    Text("VMC→LINE").font(.system(size: geometry.size.height * 0.030, weight: .bold)).foregroundColor(.gray)
+                    Text(String(format: "%+.1f", compass.vmcToLine))
+                        .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
+                        .foregroundColor(vmcToLineColor())
+                }
+                Spacer()
+                VStack {
+                    Text("ETA").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    Text(etaString())
+                        .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
+                        .foregroundColor(compass.vmcToLine > 0 ? .green : .blue)
+                }
+                Spacer()
+                VStack {
+                    Text("SOG").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    Text(String(format: "%.1f", compass.sog))
+                        .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
+                }
+                Spacer()
                 VStack {
                     Text("DIST").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
                     Text(String(format: "%.0fm", compass.distanceToLine))
                         .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
                 }
-                Spacer()
-                VStack {
-                    Text("VMC").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
-                    Text(String(format: "%.1f", compass.vmcToMark))
-                        .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
-                        .foregroundColor(compass.vmcToMark > 0 ? .green : .red)
-                }
-                Spacer()
-                VStack {
-                    Text("BURN").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
-                    Text(String(format: "%+.0fs", compass.timeToBurn))
-                        .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
-                        .foregroundColor(compass.timeToBurn > 0 ? .green : .red)
-                }
             }
-            .padding(.horizontal, 30)
+            .padding(.horizontal, 20)
             .frame(height: geometry.size.height * 0.12)
             
             Spacer()
