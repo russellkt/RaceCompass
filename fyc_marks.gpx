@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Manual Fix" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>FYC Sailing Markers</name>
+    <desc>Fairhope Yacht Club Racing Markers</desc>
+  </metadata>
+  <wpt lat="30.56439" lon="-87.93425"><name>FYC-N</name></wpt>
+  <wpt lat="30.55907" lon="-87.94922"><name>FYCNW</name></wpt>
+  <wpt lat="30.54709" lon="-87.95579"><name>FYC-W</name></wpt>
+  <wpt lat="30.53377" lon="-87.94929"><name>FYCSW</name></wpt>
+  <wpt lat="30.52913" lon="-87.93439"><name>FYC-S</name></wpt>
+  <wpt lat="30.53367" lon="-87.92002"><name>FYCSE</name></wpt>
+  <wpt lat="30.54503" lon="-87.91224"><name>FYC-E</name></wpt>
+  <wpt lat="30.55889" lon="-87.91989"><name>FYCNE</name></wpt>
+  <wpt lat="30.54638" lon="-87.93457"><name>FYC-X</name></wpt>
+  
+  <rte>
+    <name>FYC Race Course</name>
+    <rtept lat="30.56439" lon="-87.93425"><name>FYC-N</name></rtept>
+    <rtept lat="30.55907" lon="-87.94922"><name>FYCNW</name></rtept>
+    <rtept lat="30.54709" lon="-87.95579"><name>FYC-W</name></rtept>
+    <rtept lat="30.53377" lon="-87.94929"><name>FYCSW</name></rtept>
+    <rtept lat="30.52913" lon="-87.93439"><name>FYC-S</name></rtept>
+    <rtept lat="30.53367" lon="-87.92002"><name>FYCSE</name></rtept>
+    <rtept lat="30.54503" lon="-87.91224"><name>FYC-E</name></rtept>
+    <rtept lat="30.55889" lon="-87.91989"><name>FYCNE</name></rtept>
+    <rtept lat="30.54638" lon="-87.93457"><name>FYC-X</name></rtept>
+  </rte>
+</gpx>
