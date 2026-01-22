@@ -937,9 +937,9 @@ struct StartView: View {
                     .foregroundColor(.white).cornerRadius(10)
                 }
             }
-            .frame(height: geometry.size.height * 0.15)
+            .frame(height: geometry.size.height * 0.12)
             .padding(.horizontal)
-            .padding(.bottom, 15) // Explicit bottom padding
+            .padding(.bottom, 35) // Extra padding for home indicator
         }
     }
 }
