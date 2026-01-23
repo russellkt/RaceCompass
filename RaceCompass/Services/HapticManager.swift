@@ -4,12 +4,14 @@ import SwiftUI
 class HapticManager {
     static let shared = HapticManager()
 
+    /// UserDefaults key for haptics enabled state - use this in @AppStorage
+    static let enabledKey = "hapticsEnabled"
+
     private let defaults = UserDefaults.standard
-    private let key = "hapticsEnabled"
 
     var isEnabled: Bool {
-        get { defaults.object(forKey: key) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: key) }
+        get { defaults.object(forKey: Self.enabledKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Self.enabledKey) }
     }
 
     private init() {}

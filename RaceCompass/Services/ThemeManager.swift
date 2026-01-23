@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 protocol Theme {
     var name: String { get }
