@@ -36,6 +36,8 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var startPhase: StartPhase = .setup  // Current coaching phase
     @Published var targetReachDistance: Double = 0.0 // How far to reach out (meters)
     @Published var suggestedReachCourse: Double = 0.0 // Course to steer when reaching (degrees)
+    @Published var lineBias: Double = 0.0           // Positive = pin favored, negative = boat favored (meters)
+    @Published var portApproachRecommended: Bool = false // True if port tack approach is advantageous
     @Published var accelConfig = AccelerationConfig()
 
     // --- VMC & COURSE TRACKING ---
@@ -284,32 +286,62 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
 
+        // Calculate line bias (which end is favored)
+        // Positive = pin favored, negative = boat favored
+        if let wind = trueWindDirection {
+            // Compare how close each end's bearing-to-wind is to straight upwind
+            // The end that's more upwind (closer to wind direction) is favored
+            let bearingPinToWind = (wind - bearing(from: pin, to: boat) + 360).truncatingRemainder(dividingBy: 360)
+            let bearingBoatToWind = (wind - bearing(from: boat, to: pin) + 360).truncatingRemainder(dividingBy: 360)
+
+            // Normalize to -180 to 180 range
+            let pinAngleToWind = bearingPinToWind > 180 ? bearingPinToWind - 360 : bearingPinToWind
+            let boatAngleToWind = bearingBoatToWind > 180 ? bearingBoatToWind - 360 : bearingBoatToWind
+
+            // Line length in meters
+            let lineLength = pin.distance(from: boat)
+            // Bias in meters: how much closer to the windward mark the pin is vs boat
+            // Using sin of the angle difference * line length
+            let angleDiff = abs(pinAngleToWind) - abs(boatAngleToWind)
+            lineBias = sin(angleDiff * .pi / 180) * lineLength
+
+            // Port approach recommended if pin is favored by > 10m (significant bias)
+            portApproachRecommended = lineBias > 10
+        } else {
+            lineBias = 0
+            portApproachRecommended = false
+        }
+
         // Calculate reach course - prefer beam reach (90° to wind) if wind is known
         if let wind = trueWindDirection {
             // Beam reach is 90° to the wind direction
-            // Choose the tack that takes us away from the line (check VMC)
-            let beamReachStbd = (wind + 90).truncatingRemainder(dividingBy: 360)
-            let beamReachPort = (wind - 90 + 360).truncatingRemainder(dividingBy: 360)
-            // Use starboard tack beam reach by default (right of way)
-            suggestedReachCourse = beamReachStbd
-            // If we have location, check which beam reach moves us away from line
-            if let loc = currentLocation {
-                let closestPoint = closestPointOnLine(p: loc, a: pin, b: boat)
-                let bearingToLine = bearing(from: loc, to: closestPoint)
-                // Pick the beam reach that's more away from the line (opposite to bearing)
-                let diffStbd = abs((beamReachStbd - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
-                let diffPort = abs((beamReachPort - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
-                suggestedReachCourse = diffStbd > diffPort ? beamReachStbd : beamReachPort
+            let beamReachStbd = (wind + 90).truncatingRemainder(dividingBy: 360)  // Wind on port side
+            let beamReachPort = (wind - 90 + 360).truncatingRemainder(dividingBy: 360)  // Wind on starboard side
+
+            if portApproachRecommended {
+                // For port approach: reach out on starboard tack (wind on port),
+                // then return on port tack toward the pin
+                suggestedReachCourse = beamReachStbd
+            } else {
+                // Standard approach: choose tack that moves away from line
+                suggestedReachCourse = beamReachStbd
+                if let loc = currentLocation {
+                    let closestPoint = closestPointOnLine(p: loc, a: pin, b: boat)
+                    let bearingToLine = bearing(from: loc, to: closestPoint)
+                    let diffStbd = abs((beamReachStbd - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
+                    let diffPort = abs((beamReachPort - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
+                    suggestedReachCourse = diffStbd > diffPort ? beamReachStbd : beamReachPort
+                }
             }
         } else {
             // Fallback: parallel to line, toward farther end
-            let lineBearing = bearing(from: pin, to: boat)
+            let lineBearingValue = bearing(from: pin, to: boat)
             if let loc = currentLocation {
                 let distToPin = loc.distance(from: pin)
                 let distToBoat = loc.distance(from: boat)
-                suggestedReachCourse = distToPin < distToBoat ? lineBearing : (lineBearing + 180).truncatingRemainder(dividingBy: 360)
+                suggestedReachCourse = distToPin < distToBoat ? lineBearingValue : (lineBearingValue + 180).truncatingRemainder(dividingBy: 360)
             } else {
-                suggestedReachCourse = lineBearing
+                suggestedReachCourse = lineBearingValue
             }
         }
 
@@ -359,11 +391,12 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         } else if isReceding && distanceToLine > targetReachDistance * 0.9 {
             // Reached far enough, time to turn back
             startPhase = .turnBack
-            startStrategy = "TURN BACK"
+            startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
         } else if !isApproaching && secondsToStart > 60 && distanceToLine < targetReachDistance * 0.8 {
             // Plenty of time, sail away to reach position
             startPhase = .reachTo
-            startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
+            let portIndicator = portApproachRecommended ? " P" : ""
+            startStrategy = String(format: "REACH %03.0f°%@", suggestedReachCourse, portIndicator)
         } else if isApproaching {
             // Default approaching state - hold position
             startPhase = .hold
@@ -867,9 +900,23 @@ struct StartView: View {
                             .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                             .foregroundColor(.white.opacity(0.9))
                     case .reachTo:
-                        Text(String(format: "TARGET: %.0fm", compass.targetReachDistance))
-                            .font(.system(size: geometry.size.height * 0.035, weight: .medium))
-                            .foregroundColor(.white.opacity(0.9))
+                        if compass.portApproachRecommended {
+                            Text(String(format: "PIN +%.0fm • PORT APPROACH", compass.lineBias))
+                                .font(.system(size: geometry.size.height * 0.032, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                        } else {
+                            Text(String(format: "TARGET: %.0fm", compass.targetReachDistance))
+                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                    case .turnBack:
+                        if compass.portApproachRecommended {
+                            Text("HEAD TO PIN ON PORT")
+                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                        } else {
+                            EmptyView()
+                        }
                     default:
                         EmptyView()
                     }
