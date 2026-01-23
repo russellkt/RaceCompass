@@ -48,9 +48,9 @@ struct HighContrastTheme: Theme {
     var background = Color.black
     var primaryText = Color.white
     var secondaryText = Color.gray
-    var positive = Color.white // Rely on text/icon, not just color
-    var negative = Color.white
-    var warning = Color.white
+    var positive = Color.white // Bright = done/set
+    var negative = Color.white // Keep bright for visibility
+    var warning = Color.gray   // Dimmer = action needed/not set
     var tint = Color.white
     var bubbleFill = Color.white
     var bubbleText = Color.black
