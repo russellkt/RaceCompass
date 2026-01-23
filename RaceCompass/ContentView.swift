@@ -35,6 +35,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // --- IMPROVED START COACHING ---
     @Published var vmcToLine: Double = 0.0          // VMC toward closest point on line (knots)
     @Published var timeToLineVMC: Double = 0.0      // Time to line at current VMC (seconds)
+    @Published var bearingToLine: Double = 0.0      // Bearing to closest point on line (degrees)
     @Published var startPhase: StartPhase = .setup  // Current coaching phase
     @Published var targetReachDistance: Double = 0.0 // How far to reach along line (meters) - locked when in REACH phase
     @Published var distanceAlongLine: Double = 0.0  // Current distance traveled along line from reach start
@@ -300,14 +301,15 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let userLoc = currentLocation, let boat = boatEnd, let pin = pinEnd else {
             vmcToLine = 0
             timeToLineVMC = 0
+            bearingToLine = 0
             return
         }
 
         // Find closest point on line
         let closestPoint = closestPointOnLine(p: userLoc, a: pin, b: boat)
 
-        // Calculate bearing to closest point
-        let bearingToLine = bearing(from: userLoc, to: closestPoint)
+        // Calculate bearing to closest point and store it
+        bearingToLine = bearing(from: userLoc, to: closestPoint)
 
         // Calculate VMC = SOG × cos(angle difference)
         let angleDiff = (cog - bearingToLine) * .pi / 180
@@ -1038,27 +1040,31 @@ struct StartView: View {
                         }
                         .foregroundColor(compass.sog >= compass.accelConfig.targetSpeed * 0.9 ? themeManager.currentTheme.bubbleText : themeManager.currentTheme.bubbleText.opacity(0.7))
                     case .hold, .slowTo:
-                        Text(String(format: "VMC: %.1f kt", compass.vmcToLine))
-                            .font(.system(size: geometry.size.height * 0.035, weight: .medium))
-                            .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
+                        // Show bearing to line when approaching
+                        if compass.vmcToLine > 0.1 {
+                            Text(String(format: "LINE %03.0f° • VMC %.1f kt", compass.bearingToLine, compass.vmcToLine))
+                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                                .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
+                        } else {
+                            Text(String(format: "VMC: %.1f kt", compass.vmcToLine))
+                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                                .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
+                        }
                     case .reachTo:
                         if compass.portApproachRecommended {
                             Text(String(format: "PIN +%.0fm • PORT APPROACH", compass.lineBias))
                                 .font(.system(size: geometry.size.height * 0.032, weight: .medium))
                                 .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         } else {
-                            Text(String(format: "TARGET: %.0fm", compass.targetReachDistance))
+                            Text(String(format: "%.0fm / %.0fm", compass.distanceAlongLine, compass.targetReachDistance))
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                                 .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         }
                     case .turnBack:
-                        if compass.portApproachRecommended {
-                            Text("HEAD TO PIN ON PORT")
-                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
-                                .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
-                        } else {
-                            EmptyView()
-                        }
+                        // Show bearing to line prominently when turning back
+                        Text(String(format: "STEER %03.0f° TO LINE", compass.bearingToLine))
+                            .font(.system(size: geometry.size.height * 0.04, weight: .bold))
+                            .foregroundColor(themeManager.currentTheme.bubbleText)
                     default:
                         EmptyView()
                     }
