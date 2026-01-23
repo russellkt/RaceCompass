@@ -36,11 +36,14 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var vmcToLine: Double = 0.0          // VMC toward closest point on line (knots)
     @Published var timeToLineVMC: Double = 0.0      // Time to line at current VMC (seconds)
     @Published var startPhase: StartPhase = .setup  // Current coaching phase
-    @Published var targetReachDistance: Double = 0.0 // How far to reach out (meters) - locked when in REACH phase
+    @Published var targetReachDistance: Double = 0.0 // How far to reach along line (meters) - locked when in REACH phase
+    @Published var distanceAlongLine: Double = 0.0  // Current distance traveled along line from reach start
     private var isTargetLocked: Bool = false        // True when in REACH/TURNBACK phases
+    private var reachStartPosition: CLLocation?     // Position when REACH phase started
     @Published var suggestedReachCourse: Double = 0.0 // Course to steer when reaching (degrees)
     @Published var lineBias: Double = 0.0           // Positive = pin favored, negative = boat favored (meters)
     @Published var portApproachRecommended: Bool = false // True if port tack approach is advantageous
+    @Published var pastBoundary: Bool = false         // True if past 45° boundary from line end
     @Published var accelConfig = AccelerationConfig()
 
     // --- VMC & COURSE TRACKING ---
@@ -367,36 +370,48 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             portApproachRecommended = false
         }
 
-        // Calculate reach course - prefer beam reach (90° to wind) if wind is known
-        if let wind = trueWindDirection {
-            // Beam reach is 90° to the wind direction
-            let beamReachStbd = (wind + 90).truncatingRemainder(dividingBy: 360)  // Wind on port side
-            let beamReachPort = (wind - 90 + 360).truncatingRemainder(dividingBy: 360)  // Wind on starboard side
+        // Calculate reach course - PARALLEL to the line
+        // The reach maneuver sails along the line extension, not perpendicular to it
+        let lineBearingPinToBoat = bearing(from: pin, to: boat)
+        let lineBearingBoatToPin = (lineBearingPinToBoat + 180).truncatingRemainder(dividingBy: 360)
+
+        if let loc = currentLocation {
+            // Choose direction based on which end is closer (reach away from closer end)
+            let distToPin = loc.distance(from: pin)
+            let distToBoat = loc.distance(from: boat)
 
             if portApproachRecommended {
-                // For port approach: reach out on starboard tack (wind on port),
-                // then return on port tack toward the pin
-                suggestedReachCourse = beamReachStbd
+                // Pin is favored - reach toward boat end, return toward pin
+                suggestedReachCourse = lineBearingPinToBoat
             } else {
-                // Standard approach: choose tack that moves away from line
-                suggestedReachCourse = beamReachStbd
-                if let loc = currentLocation {
-                    let closestPoint = closestPointOnLine(p: loc, a: pin, b: boat)
-                    let bearingToLine = bearing(from: loc, to: closestPoint)
-                    let diffStbd = abs((beamReachStbd - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
-                    let diffPort = abs((beamReachPort - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
-                    suggestedReachCourse = diffStbd > diffPort ? beamReachStbd : beamReachPort
-                }
+                // Standard: reach away from closer end
+                suggestedReachCourse = distToPin < distToBoat ? lineBearingBoatToPin : lineBearingPinToBoat
             }
         } else {
-            // Fallback: parallel to line, toward farther end
-            let lineBearingValue = bearing(from: pin, to: boat)
-            if let loc = currentLocation {
-                let distToPin = loc.distance(from: pin)
-                let distToBoat = loc.distance(from: boat)
-                suggestedReachCourse = distToPin < distToBoat ? lineBearingValue : (lineBearingValue + 180).truncatingRemainder(dividingBy: 360)
-            } else {
-                suggestedReachCourse = lineBearingValue
+            suggestedReachCourse = lineBearingPinToBoat
+        }
+
+        // Check 45° boundary - don't sail too far past line ends
+        // On starboard tack (reaching toward boat end): don't go past 45° from pin
+        // On port tack (reaching toward pin end): don't go past 45° from boat
+        pastBoundary = false
+        if let loc = currentLocation {
+            let bearingFromPin = bearing(from: pin, to: loc)
+            let bearingFromBoat = bearing(from: boat, to: loc)
+
+            // Angle from line extended past each end
+            var angleFromPinEnd = abs(bearingFromPin - lineBearingPinToBoat)
+            if angleFromPinEnd > 180 { angleFromPinEnd = 360 - angleFromPinEnd }
+
+            var angleFromBoatEnd = abs(bearingFromBoat - lineBearingBoatToPin)
+            if angleFromBoatEnd > 180 { angleFromBoatEnd = 360 - angleFromBoatEnd }
+
+            // If reaching toward boat end and past 45° from pin, or vice versa
+            let reachingTowardBoat = abs(suggestedReachCourse - lineBearingPinToBoat) < 90
+            if reachingTowardBoat && angleFromPinEnd > 45 {
+                pastBoundary = true
+            } else if !reachingTowardBoat && angleFromBoatEnd > 45 {
+                pastBoundary = true
             }
         }
 
@@ -444,17 +459,26 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 startPhase = .build
                 startStrategy = "BUILD SPEED"
             }
-        } else if isReceding && distanceToLine > targetReachDistance * 0.9 {
-            // === REACHED TARGET - turn back toward line ===
+        } else if pastBoundary {
+            // === PAST 45° BOUNDARY - must turn back ===
+            startPhase = .turnBack
+            startStrategy = "BOUNDARY"
+        } else if distanceAlongLine >= targetReachDistance * 0.9 && isTargetLocked {
+            // === REACHED TARGET DISTANCE along line - turn back ===
             startPhase = .turnBack
             startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
-        } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime && distanceToLine < targetReachDistance * 0.9 {
-            // === REACH PHASE - time to start maneuver, sail to target distance ===
+        } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime {
+            // === REACH PHASE - time to start maneuver, sail parallel to line ===
             // Triggers around 140s with typical settings (maneuverTime ~130s + 10s margin)
-            // Lock the target distance when entering REACH phase
+            // Lock the target distance and record start position when entering REACH phase
             if previousPhase != .reachTo && previousPhase != .turnBack {
                 targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
+                reachStartPosition = currentLocation
                 isTargetLocked = true
+            }
+            // Calculate distance traveled along line from reach start
+            if let startPos = reachStartPosition, let currentPos = currentLocation {
+                distanceAlongLine = startPos.distance(from: currentPos)
             }
             startPhase = .reachTo
             let portIndicator = portApproachRecommended ? " P" : ""
@@ -488,10 +512,12 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         if startPhase != previousPhase {
             HapticManager.shared.playPhaseChange()
-            // Unlock target distance when leaving REACH/TURNBACK phases
+            // Reset reach tracking when leaving REACH/TURNBACK phases
             if previousPhase == .reachTo || previousPhase == .turnBack {
                 if startPhase != .reachTo && startPhase != .turnBack {
                     isTargetLocked = false
+                    reachStartPosition = nil
+                    distanceAlongLine = 0
                 }
             }
         }
