@@ -36,7 +36,8 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var vmcToLine: Double = 0.0          // VMC toward closest point on line (knots)
     @Published var timeToLineVMC: Double = 0.0      // Time to line at current VMC (seconds)
     @Published var startPhase: StartPhase = .setup  // Current coaching phase
-    @Published var targetReachDistance: Double = 0.0 // How far to reach out (meters)
+    @Published var targetReachDistance: Double = 0.0 // How far to reach out (meters) - locked when in REACH phase
+    private var isTargetLocked: Bool = false        // True when in REACH/TURNBACK phases
     @Published var suggestedReachCourse: Double = 0.0 // Course to steer when reaching (degrees)
     @Published var lineBias: Double = 0.0           // Positive = pin favored, negative = boat favored (meters)
     @Published var portApproachRecommended: Bool = false // True if port tack approach is advantageous
@@ -407,8 +408,10 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // Time margin (how early/late we'd arrive at current VMC)
         let arrivalMargin = secondsToStart - timeToLine
 
-        // Calculate target reach distance
-        targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
+        // Calculate target reach distance (only when not locked in REACH/TURNBACK phase)
+        if !isTargetLocked {
+            targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
+        }
 
         // State machine for coaching phases
         if secondsToStart < 0 {
@@ -448,6 +451,11 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
         } else if !isApproaching && secondsToStart > 60 && distanceToLine < targetReachDistance * 0.8 {
             // Plenty of time, sail away to reach position
+            // Lock the target distance when entering REACH phase
+            if previousPhase != .reachTo && previousPhase != .turnBack {
+                targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
+                isTargetLocked = true
+            }
             startPhase = .reachTo
             let portIndicator = portApproachRecommended ? " P" : ""
             startStrategy = String(format: "REACH %03.0f°%@", suggestedReachCourse, portIndicator)
@@ -463,9 +471,15 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         if startPhase != previousPhase {
             HapticManager.shared.playPhaseChange()
+            // Unlock target distance when leaving REACH/TURNBACK phases
+            if previousPhase == .reachTo || previousPhase == .turnBack {
+                if startPhase != .reachTo && startPhase != .turnBack {
+                    isTargetLocked = false
+                }
+            }
         }
     }
-    
+
     // --- BUTTON ACTIONS ---
     func pingBoat() { boatEnd = currentLocation }
     func pingPin() { pinEnd = currentLocation }
