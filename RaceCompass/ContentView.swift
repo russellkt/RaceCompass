@@ -852,26 +852,21 @@ struct StartView: View {
             .padding(.vertical, 2)
             .frame(height: geometry.size.height * 0.16)
             
-            // 5. STATS ROW (12% Height) - VMC→LINE, ETA, SOG
+            // 5. STATS ROW (12% Height) - VMC (m/s), BURN, DIST
             HStack {
                 VStack {
-                    Text("VMC→LINE").font(.system(size: geometry.size.height * 0.030, weight: .bold)).foregroundColor(.gray)
-                    Text(String(format: "%+.1f", compass.vmcToLine))
+                    Text("VMC").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    // Convert knots to m/s for easier mental math with distance in meters
+                    Text(String(format: "%+.1f", compass.vmcToLine / 1.94384))
                         .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
                         .foregroundColor(vmcToLineColor())
                 }
                 Spacer()
                 VStack {
-                    Text("ETA").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
-                    Text(etaString())
+                    Text("BURN").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    Text(String(format: "%+.0fs", compass.timeToBurn))
                         .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
-                        .foregroundColor(compass.vmcToLine > 0 ? .green : .blue)
-                }
-                Spacer()
-                VStack {
-                    Text("SOG").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
-                    Text(String(format: "%.1f", compass.sog))
-                        .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
+                        .foregroundColor(compass.timeToBurn > 0 ? .green : .red)
                 }
                 Spacer()
                 VStack {
