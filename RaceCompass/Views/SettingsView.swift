@@ -5,8 +5,8 @@ struct SettingsView: View {
     @ObservedObject var waypointStore: WaypointStore
     @Binding var isPresented: Bool
 
-    // Direct access to UserDefaults for HapticManager
-    @AppStorage("hapticsEnabled") private var hapticsEnabled = true
+    // Use shared key from HapticManager to avoid mismatch
+    @AppStorage(HapticManager.enabledKey) private var hapticsEnabled = true
 
     var body: some View {
         NavigationView {
@@ -19,9 +19,7 @@ struct SettingsView: View {
                         Text("High Contrast").tag("High Contrast")
                     }
                     .pickerStyle(SegmentedPickerStyle())
-                    .onChange(of: themeManager.selectedThemeName) { _ in
-                        themeManager.updateTheme()
-                    }
+                    // Note: ThemeManager.selectedThemeName didSet already calls updateTheme()
                 }
 
                 // START COACHING SECTION
@@ -61,8 +59,10 @@ struct SettingsView: View {
                 // AUDIO/HAPTICS
                 Section(header: Text("FEEDBACK")) {
                     Toggle("Haptic Feedback", isOn: $hapticsEnabled)
-                        .onChange(of: hapticsEnabled) { newValue in
-                            HapticManager.shared.isEnabled = newValue
+                        .onChange(of: hapticsEnabled) {
+                            // Sync to HapticManager (both use same UserDefaults key,
+                            // but HapticManager caches the value for performance)
+                            HapticManager.shared.isEnabled = hapticsEnabled
                         }
                 }
 
