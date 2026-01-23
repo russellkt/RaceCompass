@@ -22,6 +22,8 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var portTackRef: Double? = nil
     @Published var trueWindDirection: Double? = nil
     @Published var timeToLayline: Double = 0.0
+    @Published var recordedUpwindSOG: Double = 5.0  // Running average of upwind speed (knots)
+    private var upwindSOGSamples: [Double] = []     // Recent samples for averaging
     
     // --- START LINE DATA ---
     @Published var boatEnd: CLLocation?
@@ -91,6 +93,50 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         // 4. Calculate VMC to target
         calculateVMC()
+
+        // 5. Record upwind SOG when sailing close-hauled
+        recordUpwindSOGIfCloseHauled()
+    }
+
+    /// Record SOG when sailing close-hauled (within 15° of tack reference)
+    func recordUpwindSOGIfCloseHauled() {
+        guard sog > 0.5 else { return }  // Ignore very slow speeds
+        guard let wind = trueWindDirection else { return }
+
+        // Check if current heading is close to either tack reference
+        let currentHeading = displayHeading
+        var isCloseHauled = false
+
+        // Calculate angle to wind
+        var angleToWind = abs(currentHeading - wind)
+        if angleToWind > 180 { angleToWind = 360 - angleToWind }
+
+        // Close-hauled is typically 35-55° from wind direction
+        if angleToWind >= 30 && angleToWind <= 60 {
+            isCloseHauled = true
+        }
+
+        // Alternative: check against tack references if set
+        if let stbdRef = starboardTackRef {
+            var diffStbd = abs(currentHeading - stbdRef)
+            if diffStbd > 180 { diffStbd = 360 - diffStbd }
+            if diffStbd < 15 { isCloseHauled = true }
+        }
+        if let portRef = portTackRef {
+            var diffPort = abs(currentHeading - portRef)
+            if diffPort > 180 { diffPort = 360 - diffPort }
+            if diffPort < 15 { isCloseHauled = true }
+        }
+
+        if isCloseHauled {
+            // Add sample and keep last 30 samples (~3 seconds at 10Hz)
+            upwindSOGSamples.append(sog)
+            if upwindSOGSamples.count > 30 {
+                upwindSOGSamples.removeFirst()
+            }
+            // Update running average
+            recordedUpwindSOG = upwindSOGSamples.reduce(0, +) / Double(upwindSOGSamples.count)
+        }
     }
     
     // --- SENSOR FUSION ---
@@ -354,7 +400,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let arrivalMargin = secondsToStart - timeToLine
 
         // Calculate target reach distance
-        targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart)
+        targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
 
         // State machine for coaching phases
         if secondsToStart < 0 {
