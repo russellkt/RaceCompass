@@ -413,9 +413,12 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
         }
 
+        // Calculate time needed for reach maneuver at current target distance
+        let maneuverTime = accelConfig.maneuverTime(forDistance: targetReachDistance)
+
         // State machine for coaching phases
         if secondsToStart < 0 {
-            // After gun
+            // === AFTER GUN ===
             if distanceToLine > 5 {
                 startPhase = .late
                 startStrategy = String(format: "LATE %.0fs", abs(secondsToStart))
@@ -424,7 +427,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 startStrategy = "GO!"
             }
         } else if secondsToStart <= accelConfig.timeToAccelerate + accelConfig.buffer {
-            // Final approach phase - time to build speed and cross
+            // === FINAL APPROACH - time to accelerate and cross ===
             if isApproaching && timeToLine < secondsToStart + 2 {
                 startPhase = .go
                 startStrategy = String(format: "GO! %.0fs", secondsToStart)
@@ -432,25 +435,12 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 startPhase = .build
                 startStrategy = "BUILD SPEED"
             }
-        } else if isApproaching && arrivalMargin < 0 {
-            // Would arrive late at current pace
-            startPhase = .build
-            startStrategy = "BUILD SPEED"
-        } else if isApproaching && arrivalMargin < accelConfig.timeToAccelerate {
-            // Approaching with about right timing
-            startPhase = .hold
-            startStrategy = String(format: "HOLD %.0fs", arrivalMargin)
-        } else if isApproaching && arrivalMargin > 30 && distanceToLine < 50 {
-            // Too close, too early - need to slow down
-            let targetSpeedKnots = max(1.0, distanceToLine / (secondsToStart - accelConfig.timeToAccelerate) * 1.94384)
-            startPhase = .slowTo
-            startStrategy = String(format: "SLOW TO %.1fkt", targetSpeedKnots)
         } else if isReceding && distanceToLine > targetReachDistance * 0.9 {
-            // Reached far enough, time to turn back
+            // === REACHED TARGET - turn back toward line ===
             startPhase = .turnBack
             startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
-        } else if !isApproaching && secondsToStart > 60 && distanceToLine < targetReachDistance * 0.8 {
-            // Plenty of time, sail away to reach position
+        } else if !isApproaching && secondsToStart > maneuverTime * 0.9 && secondsToStart < maneuverTime * 1.5 && distanceToLine < targetReachDistance * 0.8 {
+            // === REACH PHASE - time to start maneuver, sail to target distance ===
             // Lock the target distance when entering REACH phase
             if previousPhase != .reachTo && previousPhase != .turnBack {
                 targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
@@ -459,12 +449,25 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             startPhase = .reachTo
             let portIndicator = portApproachRecommended ? " P" : ""
             startStrategy = String(format: "REACH %03.0f°%@", suggestedReachCourse, portIndicator)
+        } else if isApproaching && arrivalMargin < 0 {
+            // === APPROACHING BUT LATE - need more speed ===
+            startPhase = .build
+            startStrategy = "BUILD SPEED"
+        } else if isApproaching && arrivalMargin < accelConfig.timeToAccelerate {
+            // === APPROACHING WITH GOOD TIMING ===
+            startPhase = .hold
+            startStrategy = String(format: "HOLD %.0fs", arrivalMargin)
+        } else if isApproaching && arrivalMargin > 30 && distanceToLine < 50 {
+            // === APPROACHING TOO FAST - slow down (only during approach phase) ===
+            let targetSpeedKnots = max(1.0, distanceToLine / (secondsToStart - accelConfig.timeToAccelerate) * 1.94384)
+            startPhase = .slowTo
+            startStrategy = String(format: "SLOW TO %.1fkt", targetSpeedKnots)
         } else if isApproaching {
-            // Default approaching state - hold position
+            // === DEFAULT APPROACHING - hold position ===
             startPhase = .hold
             startStrategy = String(format: "HOLD %.0fs", max(0, arrivalMargin))
         } else {
-            // Not clearly approaching or receding - hold
+            // === NOT APPROACHING OR RECEDING - hold/wait ===
             startPhase = .hold
             startStrategy = String(format: "HOLD %.0fs", max(0, secondsToStart - accelConfig.timeToAccelerate))
         }
