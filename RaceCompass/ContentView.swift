@@ -35,6 +35,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var timeToLineVMC: Double = 0.0      // Time to line at current VMC (seconds)
     @Published var startPhase: StartPhase = .setup  // Current coaching phase
     @Published var targetReachDistance: Double = 0.0 // How far to reach out (meters)
+    @Published var suggestedReachCourse: Double = 0.0 // Course to steer when reaching (degrees)
     @Published var accelConfig = AccelerationConfig()
 
     // --- VMC & COURSE TRACKING ---
@@ -270,7 +271,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Determine the current coaching phase based on position, speed, and timing
     func determineStartPhase() {
-        guard boatEnd != nil, pinEnd != nil else {
+        guard let boat = boatEnd, let pin = pinEnd else {
             startPhase = .setup
             startStrategy = "SET LINE"
             return
@@ -281,6 +282,17 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             startPhase = .raceStarted
             startStrategy = "RACE STARTED"
             return
+        }
+
+        // Calculate reach course (parallel to line, away from closest end)
+        // Bearing from pin to boat gives line direction
+        let lineBearing = bearing(from: pin, to: boat)
+        // Choose direction based on which end is closer (reach toward the farther end)
+        if let loc = currentLocation {
+            let distToPin = loc.distance(from: pin)
+            let distToBoat = loc.distance(from: boat)
+            // If closer to pin, reach toward boat (lineBearing); if closer to boat, reach toward pin
+            suggestedReachCourse = distToPin < distToBoat ? lineBearing : (lineBearing + 180).truncatingRemainder(dividingBy: 360)
         }
 
         // Calculate key values
@@ -333,7 +345,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         } else if !isApproaching && secondsToStart > 60 && distanceToLine < targetReachDistance * 0.8 {
             // Plenty of time, sail away to reach position
             startPhase = .reachTo
-            startStrategy = String(format: "REACH TO %.0fm", targetReachDistance)
+            startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
         } else if isApproaching {
             // Default approaching state - hold position
             startPhase = .hold
@@ -837,7 +849,7 @@ struct StartView: View {
                             .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                             .foregroundColor(.white.opacity(0.9))
                     case .reachTo:
-                        Text(String(format: "DIST: %.0fm", compass.distanceToLine))
+                        Text(String(format: "TARGET: %.0fm", compass.targetReachDistance))
                             .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                             .foregroundColor(.white.opacity(0.9))
                     default:
