@@ -171,3 +171,139 @@ RaceCompass/
 - Course templates (windward-leeward, triangle, etc.)
 - Mark rounding direction indicators
 - Integration with actual wind instruments
+
+---
+
+# RaceCompass Development Session - January 23, 2026
+
+## Overview
+This session merged PR #1 (Themes, Haptics, Settings), fixed issues from that merge, and significantly improved the prestart reach maneuver coaching system with physics-based timing and proper sailing geometry.
+
+---
+
+## PR #1 Merge: Themes, Haptics, and Settings
+
+**New Files:**
+- `Services/ThemeManager.swift` - Day, Night (red), High Contrast themes
+- `Services/HapticManager.swift` - Tactile feedback for phase changes and gun
+- `Views/SettingsView.swift` - Configure themes, haptics, and boat speed params
+
+**Capabilities:**
+- Theme switching persisted via @AppStorage
+- Haptic feedback on start phase transitions and gun (0:00)
+- Adjustable target speed, acceleration time, and safety buffer
+
+---
+
+## Post-Merge Fixes
+
+### Minor Code Quality Fixes
+- Removed redundant `updateTheme()` call (didSet already handles it)
+- Used shared `HapticManager.enabledKey` constant to prevent key mismatch
+- Updated deprecated `onChange(of:perform:)` to iOS 17+ signature
+- Added missing `import Combine` to ThemeManager
+
+### High Contrast Theme Fix
+- Changed `warning` color from white to gray
+- SET STB/PORT buttons now visually change (gray → white) when set
+
+---
+
+## Prestart Coaching Overhaul
+
+### Target Distance Now Locks on REACH Entry
+**Problem:** Target distance was recalculating every tick, counting down even when stationary.
+**Fix:** Lock `targetReachDistance` when entering REACH phase, reset when exiting.
+
+### Math-Based Timing (No Magic Numbers)
+All timing derived from physics:
+```swift
+maneuverTime = (distance / reachSpeed) + (distance / returnSpeed) + accelTime + buffer
+reachStartTime = maneuverTime + 10s margin
+```
+
+### Reach Course: Parallel to Line (Not Beam Reach)
+**Before:** Suggested 90° to wind (beam reach)
+**After:** Suggested course parallel to start line (boat-to-pin or pin-to-boat bearing)
+
+### Distance Tracking Along Line
+- Added `distanceAlongLine` - tracks travel from reach start position
+- Added `reachStartPosition` - recorded when entering REACH phase
+- TURN BACK triggers when `distanceAlongLine >= targetReachDistance * 0.9`
+
+### 45° Boundary Limits
+- Don't sail past 45° angle from line ends
+- On starboard tack: boundary is 45° past pin
+- On port tack: boundary is 45° past boat
+- Shows "BOUNDARY" warning if exceeded
+
+### SLOW TO Isolated to Approach Phase
+- Only triggers when `isApproaching` (VMC toward line > 0.1 kt)
+- Cannot appear during REACH or TURN BACK phases
+
+---
+
+## Prestart Phase Timeline
+
+| Time | Phase | Display |
+|------|-------|---------|
+| > 150s | HOLD | "PREP" |
+| 150s → ~140s | HOLD | "HOLD Xs" (countdown to reach) |
+| ~140s | REACH | "REACH 270°" with "Xm / Xm" progress |
+| Hit target distance | TURN BACK | "TURN BACK" with "STEER XXX° TO LINE" |
+| Approaching | HOLD | "HOLD Xs" with "LINE XXX° • VMC X.X kt" |
+| Too fast | SLOW TO | "SLOW TO X.Xkt" |
+| < 15s | BUILD/GO | "BUILD SPEED" / "GO!" |
+
+---
+
+## New Published Properties
+
+```swift
+@Published var bearingToLine: Double      // Bearing to closest point on line
+@Published var distanceAlongLine: Double  // Distance traveled from reach start
+@Published var pastBoundary: Bool         // True if past 45° boundary
+private var reachStartPosition: CLLocation? // Position when REACH started
+```
+
+---
+
+## Display Updates
+
+### REACH Phase
+- Shows progress: "145m / 180m" (distance traveled / target)
+
+### TURN BACK Phase
+- Shows: "STEER 270° TO LINE" prominently
+
+### HOLD/SLOW TO (Approaching)
+- Shows: "LINE 270° • VMC 3.2 kt"
+
+### Timer Remains Dominant
+- 25% of screen height
+- Largest font, always visible
+- All other info supports getting to line at zero
+
+---
+
+## Commits Today
+
+1. `2dd74cd` - Fix minor issues from PR #1 themes/haptics merge
+2. `82feec3` - Fix High Contrast theme button state visibility
+3. `fe36f5d` - Lock target reach distance when entering REACH phase
+4. `bccaf82` - Improve reach maneuver timing and isolate SLOW TO
+5. `4b0ecad` - Align prestart phases with sailing sequence timeline
+6. `b337967` - Reach parallel to line with 45° boundary limits
+7. `ead3321` - Show bearing to line during approach phases
+
+---
+
+## Key Insight: The Reach Maneuver
+
+The "reach out and reach in" prestart strategy:
+1. Sail **parallel** to the line to a target distance
+2. Target distance calculated from boat speed settings
+3. Turn back when reaching target OR hitting 45° boundary
+4. Sail back toward line on reciprocal course
+5. Bearing to line displayed to guide return heading
+6. Timer is king - everything else supports hitting zero at the line
