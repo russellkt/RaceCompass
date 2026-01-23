@@ -284,15 +284,33 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
 
-        // Calculate reach course (parallel to line, away from closest end)
-        // Bearing from pin to boat gives line direction
-        let lineBearing = bearing(from: pin, to: boat)
-        // Choose direction based on which end is closer (reach toward the farther end)
-        if let loc = currentLocation {
-            let distToPin = loc.distance(from: pin)
-            let distToBoat = loc.distance(from: boat)
-            // If closer to pin, reach toward boat (lineBearing); if closer to boat, reach toward pin
-            suggestedReachCourse = distToPin < distToBoat ? lineBearing : (lineBearing + 180).truncatingRemainder(dividingBy: 360)
+        // Calculate reach course - prefer beam reach (90° to wind) if wind is known
+        if let wind = trueWindDirection {
+            // Beam reach is 90° to the wind direction
+            // Choose the tack that takes us away from the line (check VMC)
+            let beamReachStbd = (wind + 90).truncatingRemainder(dividingBy: 360)
+            let beamReachPort = (wind - 90 + 360).truncatingRemainder(dividingBy: 360)
+            // Use starboard tack beam reach by default (right of way)
+            suggestedReachCourse = beamReachStbd
+            // If we have location, check which beam reach moves us away from line
+            if let loc = currentLocation {
+                let closestPoint = closestPointOnLine(p: loc, a: pin, b: boat)
+                let bearingToLine = bearing(from: loc, to: closestPoint)
+                // Pick the beam reach that's more away from the line (opposite to bearing)
+                let diffStbd = abs((beamReachStbd - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
+                let diffPort = abs((beamReachPort - bearingToLine + 180).truncatingRemainder(dividingBy: 360) - 180)
+                suggestedReachCourse = diffStbd > diffPort ? beamReachStbd : beamReachPort
+            }
+        } else {
+            // Fallback: parallel to line, toward farther end
+            let lineBearing = bearing(from: pin, to: boat)
+            if let loc = currentLocation {
+                let distToPin = loc.distance(from: pin)
+                let distToBoat = loc.distance(from: boat)
+                suggestedReachCourse = distToPin < distToBoat ? lineBearing : (lineBearing + 180).truncatingRemainder(dividingBy: 360)
+            } else {
+                suggestedReachCourse = lineBearing
+            }
         }
 
         // Calculate key values
