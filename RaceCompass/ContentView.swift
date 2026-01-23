@@ -416,6 +416,15 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // Calculate time needed for reach maneuver at current target distance
         let maneuverTime = accelConfig.maneuverTime(forDistance: targetReachDistance)
 
+        // Time thresholds based on sailing prestart sequence:
+        // - > 150s: Prep phase, stay nearby
+        // - ~140s: Start reach out maneuver
+        // - ~50s of reaching out to target distance
+        // - ~70s: Should be heading back toward line
+        // - Final: Build speed and cross
+        let reachStartTime = maneuverTime + 10  // Start reach with 10s margin (~140s typically)
+        let minApproachTime = accelConfig.timeToAccelerate + accelConfig.buffer + 20  // Don't reach if < ~35s
+
         // State machine for coaching phases
         if secondsToStart < 0 {
             // === AFTER GUN ===
@@ -439,8 +448,9 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // === REACHED TARGET - turn back toward line ===
             startPhase = .turnBack
             startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
-        } else if !isApproaching && secondsToStart > maneuverTime * 0.9 && secondsToStart < maneuverTime * 1.5 && distanceToLine < targetReachDistance * 0.8 {
+        } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime && distanceToLine < targetReachDistance * 0.9 {
             // === REACH PHASE - time to start maneuver, sail to target distance ===
+            // Triggers around 140s with typical settings (maneuverTime ~130s + 10s margin)
             // Lock the target distance when entering REACH phase
             if previousPhase != .reachTo && previousPhase != .turnBack {
                 targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
@@ -462,14 +472,18 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let targetSpeedKnots = max(1.0, distanceToLine / (secondsToStart - accelConfig.timeToAccelerate) * 1.94384)
             startPhase = .slowTo
             startStrategy = String(format: "SLOW TO %.1fkt", targetSpeedKnots)
+        } else if secondsToStart > 150 {
+            // === PREP PHASE - > 2.5 min, prep boat and crew ===
+            startPhase = .hold
+            startStrategy = "PREP"
         } else if isApproaching {
-            // === DEFAULT APPROACHING - hold position ===
+            // === APPROACHING - hold position ===
             startPhase = .hold
             startStrategy = String(format: "HOLD %.0fs", max(0, arrivalMargin))
         } else {
-            // === NOT APPROACHING OR RECEDING - hold/wait ===
+            // === WAITING FOR REACH - not yet time to start maneuver ===
             startPhase = .hold
-            startStrategy = String(format: "HOLD %.0fs", max(0, secondsToStart - accelConfig.timeToAccelerate))
+            startStrategy = String(format: "HOLD %.0fs", max(0, secondsToStart - maneuverTime))
         }
 
         if startPhase != previousPhase {
