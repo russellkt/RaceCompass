@@ -497,6 +497,7 @@ struct ContentView: View {
             .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
             .statusBar(hidden: true)
             .persistentSystemOverlays(.hidden)
+            .preferredColorScheme(.light)  // Force light mode for high-contrast visibility
             .id(geometry.size)
             .gesture(DragGesture().onChanged { gesture in
                 if mode == .race {
