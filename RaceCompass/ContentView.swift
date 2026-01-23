@@ -76,7 +76,13 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func updateTimerLogic() {
         // 1. Calculate Time Remaining
         let now = Date()
+        let previousSeconds = self.secondsToStart
         self.secondsToStart = targetTime.timeIntervalSince(now)
+
+        // Haptics: Gun
+        if previousSeconds >= 0 && secondsToStart < 0 {
+             HapticManager.shared.playGun()
+        }
 
         // 2. Update Strategies
         if secondsToStart > -60 { // Keep calculating for 1 min after start
@@ -319,6 +325,8 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Determine the current coaching phase based on position, speed, and timing
     func determineStartPhase() {
+        let previousPhase = startPhase
+
         guard let boat = boatEnd, let pin = pinEnd else {
             startPhase = .setup
             startStrategy = "SET LINE"
@@ -452,6 +460,10 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             startPhase = .hold
             startStrategy = String(format: "HOLD %.0fs", max(0, secondsToStart - accelConfig.timeToAccelerate))
         }
+
+        if startPhase != previousPhase {
+            HapticManager.shared.playPhaseChange()
+        }
     }
     
     // --- BUTTON ACTIONS ---
@@ -562,16 +574,18 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 struct ContentView: View {
     @StateObject var compass = CompassViewModel()
     @StateObject var waypointStore = WaypointStore()
+    @EnvironmentObject var themeManager: ThemeManager
     @State private var startDragOffset: Double = 0.0
     @State private var mode: AppMode = .start
     @State private var showingCourseSetup = false
+    @State private var showingSettings = false
 
     enum AppMode { case start, race }
     
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color.white.edgesIgnoringSafeArea(.all)
+                themeManager.currentTheme.background.edgesIgnoringSafeArea(.all)
                 
                 VStack(spacing: 0) {
                     
@@ -580,24 +594,35 @@ struct ContentView: View {
                         Button(action: { mode = .start }) {
                             Text("START").bold()
                                 .padding(10)
-                                .background(mode == .start ? Color.black : Color.gray.opacity(0.1))
-                                .foregroundColor(mode == .start ? .white : .black)
+                                .background(mode == .start ? themeManager.currentTheme.tint : themeManager.currentTheme.secondaryText.opacity(0.2))
+                                .foregroundColor(themeManager.currentTheme.background)
                                 .cornerRadius(8)
                         }
                         Spacer()
                         if let wind = compass.trueWindDirection {
-                            Text("WIND: \(Int(wind))°").font(.headline).bold()
+                            Text("WIND: \(Int(wind))°")
+                                .font(.headline).bold()
+                                .foregroundColor(themeManager.currentTheme.primaryText)
                         }
                         Spacer()
+
+                        Button(action: { showingSettings = true }) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.title2)
+                                .foregroundColor(themeManager.currentTheme.secondaryText)
+                                .padding(.trailing, 10)
+                        }
+
                         Button(action: { mode = .race }) {
                             Text("RACE").bold()
                                 .padding(10)
-                                .background(mode == .race ? Color.black : Color.gray.opacity(0.1))
-                                .foregroundColor(mode == .race ? .white : .black)
+                                .background(mode == .race ? themeManager.currentTheme.tint : themeManager.currentTheme.secondaryText.opacity(0.2))
+                                .foregroundColor(themeManager.currentTheme.background)
                                 .cornerRadius(8)
                         }
                     }
                     .padding(.horizontal).padding(.top, 10).frame(height: 50)
+                    .background(themeManager.currentTheme.topBarBackground)
                     
                     if mode == .race { RaceView(compass: compass, geometry: geometry) }
                     else { StartView(compass: compass, waypointStore: waypointStore, showingCourseSetup: $showingCourseSetup, geometry: geometry) }
@@ -606,7 +631,7 @@ struct ContentView: View {
             .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
             .statusBar(hidden: true)
             .persistentSystemOverlays(.hidden)
-            .preferredColorScheme(.light)  // Force light mode for high-contrast visibility
+            .preferredColorScheme(themeManager.currentTheme.name == "Night" ? .dark : .light)
             .id(geometry.size)
             .gesture(DragGesture().onChanged { gesture in
                 if mode == .race {
@@ -614,6 +639,11 @@ struct ContentView: View {
                     compass.manualAdjust(newValue: startDragOffset + gesture.translation.width * 0.2)
                 }
             }.onEnded { _ in compass.isDragging = false })
+            .sheet(isPresented: $showingSettings, onDismiss: {
+                compass.accelConfig = waypointStore.accelConfig
+            }) {
+                SettingsView(themeManager: themeManager, waypointStore: waypointStore, isPresented: $showingSettings)
+            }
             .sheet(isPresented: $showingCourseSetup) {
                 CourseSetupView(
                     waypointStore: waypointStore,
@@ -649,6 +679,7 @@ struct ContentView: View {
 // --- RACE VIEW (Maximized for cockpit visibility) ---
 struct RaceView: View {
     @ObservedObject var compass: CompassViewModel
+    @EnvironmentObject var themeManager: ThemeManager
     var geometry: GeometryProxy
 
     func calculateBubbleOffset(totalWidth: CGFloat) -> CGFloat {
@@ -674,23 +705,24 @@ struct RaceView: View {
                 VStack(spacing: 0) {
                     Text(String(format: "%03.0f", compass.nextMarkBearing))
                         .font(.system(size: geometry.size.height * 0.22, weight: .black, design: .monospaced))
+                        .foregroundColor(themeManager.currentTheme.primaryText)
                         .minimumScaleFactor(0.5)
                     Text("BRG")
                         .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                        .foregroundColor(.gray)
+                        .foregroundColor(themeManager.currentTheme.secondaryText)
                 }
 
-                Divider().padding(.horizontal, 10)
+                Divider().background(themeManager.currentTheme.secondaryText).padding(.horizontal, 10)
 
                 // VMC
                 VStack(spacing: 0) {
                     Text(String(format: "%.1f", compass.vmcToMark))
                         .font(.system(size: geometry.size.height * 0.22, weight: .black, design: .monospaced))
-                        .foregroundColor(compass.vmcToMark > 0 ? .green : .red)
+                        .foregroundColor(compass.vmcToMark > 0 ? themeManager.currentTheme.positive : themeManager.currentTheme.negative)
                         .minimumScaleFactor(0.5)
                     Text("VMC")
                         .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                        .foregroundColor(.gray)
+                        .foregroundColor(themeManager.currentTheme.secondaryText)
                 }
 
                 Spacer()
@@ -699,9 +731,10 @@ struct RaceView: View {
                 VStack(spacing: 0) {
                     Text(String(format: "%03.0f", compass.cog))
                         .font(.system(size: geometry.size.height * 0.12, weight: .bold, design: .monospaced))
+                        .foregroundColor(themeManager.currentTheme.primaryText)
                     Text("COG")
                         .font(.system(size: geometry.size.height * 0.04, weight: .bold))
-                        .foregroundColor(.gray)
+                        .foregroundColor(themeManager.currentTheme.secondaryText)
                 }
                 .padding(.bottom, 10)
             }
@@ -714,13 +747,13 @@ struct RaceView: View {
                     Group {
                         if compass.timeToLayline < -10 {
                             Text("OVER \(Int(abs(compass.timeToLayline)))s")
-                                .foregroundColor(.red)
+                                .foregroundColor(themeManager.currentTheme.negative)
                         } else if compass.timeToLayline < 0 {
                             Text("TACK!")
-                                .foregroundColor(.red)
+                                .foregroundColor(themeManager.currentTheme.negative)
                         } else {
                             Text("+\(Int(compass.timeToLayline))s")
-                                .foregroundColor(.green)
+                                .foregroundColor(themeManager.currentTheme.positive)
                         }
                     }
                     .font(.system(size: geometry.size.height * 0.08, weight: .black))
@@ -732,12 +765,13 @@ struct RaceView: View {
                 // Main heading - as big as possible
                 Text(String(format: "%03.0f", compass.displayHeading))
                     .font(.system(size: geometry.size.height * 0.45, weight: .black, design: .monospaced))
+                    .foregroundColor(themeManager.currentTheme.primaryText)
                     .minimumScaleFactor(0.3)
                     .lineLimit(1)
 
                 Text("HDG")
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                    .foregroundColor(.gray)
+                    .foregroundColor(themeManager.currentTheme.secondaryText)
 
                 Spacer()
 
@@ -745,9 +779,10 @@ struct RaceView: View {
                 VStack(spacing: 2) {
                     Text("\(Int(abs(compass.heelAngle)))°")
                         .font(.system(size: geometry.size.height * 0.10, weight: .bold, design: .monospaced))
-                    Capsule().fill(Color.gray.opacity(0.3))
+                        .foregroundColor(themeManager.currentTheme.primaryText)
+                    Capsule().fill(themeManager.currentTheme.secondaryText.opacity(0.3))
                         .frame(width: geometry.size.width * 0.20, height: 10)
-                        .overlay(Circle().fill(Color.black).padding(1)
+                        .overlay(Circle().fill(themeManager.currentTheme.bubbleFill).padding(1)
                             .offset(x: calculateBubbleOffset(totalWidth: geometry.size.width * 0.20)))
                 }
                 .padding(.bottom, 10)
@@ -760,22 +795,24 @@ struct RaceView: View {
                 VStack(spacing: 0) {
                     Text(formatDistance(compass.distanceToMark))
                         .font(.system(size: geometry.size.height * 0.18, weight: .black, design: .monospaced))
+                        .foregroundColor(themeManager.currentTheme.primaryText)
                         .minimumScaleFactor(0.5)
                     Text(compass.distanceToMark < 1000 ? "m" : "nm")
                         .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                        .foregroundColor(.gray)
+                        .foregroundColor(themeManager.currentTheme.secondaryText)
                 }
 
-                Divider().padding(.horizontal, 10)
+                Divider().background(themeManager.currentTheme.secondaryText).padding(.horizontal, 10)
 
                 // SOG
                 VStack(spacing: 0) {
                     Text(String(format: "%.1f", compass.sog))
                         .font(.system(size: geometry.size.height * 0.18, weight: .black, design: .monospaced))
+                        .foregroundColor(themeManager.currentTheme.primaryText)
                         .minimumScaleFactor(0.5)
                     Text("SOG")
                         .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                        .foregroundColor(.gray)
+                        .foregroundColor(themeManager.currentTheme.secondaryText)
                 }
 
                 Spacer()
@@ -786,8 +823,8 @@ struct RaceView: View {
                         .font(.system(size: geometry.size.height * 0.08, weight: .black))
                         .padding(.horizontal, 15)
                         .padding(.vertical, 8)
-                        .background(Color.orange)
-                        .foregroundColor(.white)
+                        .background(themeManager.currentTheme.warning)
+                        .foregroundColor(themeManager.currentTheme.bubbleText)
                         .cornerRadius(10)
                 }
                 .padding(.bottom, 10)
@@ -802,6 +839,7 @@ struct StartView: View {
     @ObservedObject var compass: CompassViewModel
     @ObservedObject var waypointStore: WaypointStore
     @Binding var showingCourseSetup: Bool
+    @EnvironmentObject var themeManager: ThemeManager
     var geometry: GeometryProxy
 
     // Helper to get waypoint name for display
@@ -827,36 +865,37 @@ struct StartView: View {
 
     // Color coding for coach message background
     func coachBackgroundColor() -> Color {
+        let theme = themeManager.currentTheme
         switch compass.startPhase {
         case .go:
-            return .green
+            return theme.positive
         case .late:
-            return .red
+            return theme.negative
         case .slowTo:
-            return .orange
+            return theme.warning
         case .build:
-            return .purple
+            return theme.tint
         case .turnBack:
-            return .orange
+            return theme.warning
         case .reachTo:
-            return .blue
+            return theme.tint
         case .hold:
-            return .blue
+            return theme.tint
         case .setup:
-            return .gray
+            return theme.secondaryText
         case .raceStarted:
-            return .gray
+            return theme.secondaryText
         }
     }
 
     // Format VMC to line with color indicator
     func vmcToLineColor() -> Color {
         if compass.vmcToLine > 0.5 {
-            return .green   // Approaching line
+            return themeManager.currentTheme.positive   // Approaching line
         } else if compass.vmcToLine < -0.5 {
-            return .blue    // Moving away (reaching)
+            return themeManager.currentTheme.tint    // Moving away (reaching)
         } else {
-            return .orange  // Parallel / slow
+            return themeManager.currentTheme.warning  // Parallel / slow
         }
     }
 
@@ -878,19 +917,19 @@ struct StartView: View {
             HStack(spacing: 10) {
                 Button("SET STB") { compass.setStarboardTack() }
                     .padding(.vertical, 5).padding(.horizontal, 10)
-                    .background(compass.starboardTackRef != nil ? Color.green : Color.orange)
-                    .cornerRadius(8).foregroundColor(.white)
+                    .background(compass.starboardTackRef != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
+                    .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
                 
                 Button("SET PORT") { compass.setPortTack() }
                     .padding(.vertical, 5).padding(.horizontal, 10)
-                    .background(compass.portTackRef != nil ? Color.green : Color.orange)
-                    .cornerRadius(8).foregroundColor(.white)
+                    .background(compass.portTackRef != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
+                    .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
                 
                 Button("SET WIND") { compass.setWindDirectly() }
                     .padding(.vertical, 5).padding(.horizontal, 10)
-                    .background(Color.blue).cornerRadius(8).foregroundColor(.white)
+                    .background(themeManager.currentTheme.tint).cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
             }
             .frame(height: geometry.size.height * 0.12)
@@ -900,20 +939,20 @@ struct StartView: View {
             HStack {
                 Text("START:")
                     .font(.system(size: geometry.size.height * 0.06, weight: .bold))
-                    .foregroundColor(.gray)
+                    .foregroundColor(themeManager.currentTheme.secondaryText)
                 
                 DatePicker("", selection: $compass.targetTime, displayedComponents: .hourAndMinute)
                     .labelsHidden()
                     // Scale the picker down slightly to fit tight spaces
                     .scaleEffect(0.8)
-                    .colorInvert().colorMultiply(.black)
+                    .colorInvert().colorMultiply(themeManager.currentTheme.primaryText)
             }
             .frame(height: geometry.size.height * 0.12)
             
             // 3. COUNTDOWN TIMER (25% Height)
             Text(timeString(seconds: compass.secondsToStart))
                 .font(.system(size: geometry.size.height * 0.25, weight: .black, design: .monospaced))
-                .foregroundColor(compass.secondsToStart < 60 ? .red : .black)
+                .foregroundColor(compass.secondsToStart < 60 ? themeManager.currentTheme.negative : themeManager.currentTheme.primaryText)
                 .minimumScaleFactor(0.5)
                 .lineLimit(1)
                 .frame(height: geometry.size.height * 0.25)
@@ -923,7 +962,7 @@ struct StartView: View {
                 // Primary message
                 Text(compass.startStrategy)
                     .font(.system(size: geometry.size.height * 0.08, weight: .heavy))
-                    .foregroundColor(.white)
+                    .foregroundColor(themeManager.currentTheme.bubbleText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
 
@@ -940,26 +979,26 @@ struct StartView: View {
                             Text(String(format: "%.1f kt", compass.accelConfig.targetSpeed))
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                         }
-                        .foregroundColor(compass.sog >= compass.accelConfig.targetSpeed * 0.9 ? .white : .white.opacity(0.7))
+                        .foregroundColor(compass.sog >= compass.accelConfig.targetSpeed * 0.9 ? themeManager.currentTheme.bubbleText : themeManager.currentTheme.bubbleText.opacity(0.7))
                     case .hold, .slowTo:
                         Text(String(format: "VMC: %.1f kt", compass.vmcToLine))
                             .font(.system(size: geometry.size.height * 0.035, weight: .medium))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                     case .reachTo:
                         if compass.portApproachRecommended {
                             Text(String(format: "PIN +%.0fm • PORT APPROACH", compass.lineBias))
                                 .font(.system(size: geometry.size.height * 0.032, weight: .medium))
-                                .foregroundColor(.white.opacity(0.9))
+                                .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         } else {
                             Text(String(format: "TARGET: %.0fm", compass.targetReachDistance))
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
-                                .foregroundColor(.white.opacity(0.9))
+                                .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         }
                     case .turnBack:
                         if compass.portApproachRecommended {
                             Text("HEAD TO PIN ON PORT")
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
-                                .foregroundColor(.white.opacity(0.9))
+                                .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         } else {
                             EmptyView()
                         }
@@ -978,7 +1017,7 @@ struct StartView: View {
             // 5. STATS ROW (12% Height) - VMC (m/s), BURN, DIST
             HStack {
                 VStack {
-                    Text("VMC").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    Text("VMC").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(themeManager.currentTheme.secondaryText)
                     // Convert knots to m/s for easier mental math with distance in meters
                     Text(String(format: "%+.1f", compass.vmcToLine / 1.94384))
                         .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
@@ -986,16 +1025,17 @@ struct StartView: View {
                 }
                 Spacer()
                 VStack {
-                    Text("BURN").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    Text("BURN").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(themeManager.currentTheme.secondaryText)
                     Text(String(format: "%+.0fs", compass.timeToBurn))
                         .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
-                        .foregroundColor(compass.timeToBurn > 0 ? .green : .red)
+                        .foregroundColor(compass.timeToBurn > 0 ? themeManager.currentTheme.positive : themeManager.currentTheme.negative)
                 }
                 Spacer()
                 VStack {
-                    Text("DIST").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(.gray)
+                    Text("DIST").font(.system(size: geometry.size.height * 0.035, weight: .bold)).foregroundColor(themeManager.currentTheme.secondaryText)
                     Text(String(format: "%.0fm", compass.distanceToLine))
                         .font(.system(size: geometry.size.height * 0.055, weight: .bold, design: .monospaced))
+                        .foregroundColor(themeManager.currentTheme.primaryText)
                 }
             }
             .padding(.horizontal, 20)
@@ -1015,8 +1055,8 @@ struct StartView: View {
                             .minimumScaleFactor(0.6)
                     }
                     .frame(maxWidth:.infinity, maxHeight:.infinity)
-                    .background(compass.pinEnd == nil ? Color.orange : Color.green)
-                    .foregroundColor(.white).cornerRadius(10)
+                    .background(compass.pinEnd == nil ? themeManager.currentTheme.warning : themeManager.currentTheme.positive)
+                    .foregroundColor(themeManager.currentTheme.bubbleText).cornerRadius(10)
                 }
 
                 // SET COURSE
@@ -1027,20 +1067,22 @@ struct StartView: View {
                             .font(.system(size: geometry.size.height * 0.025, weight: .bold))
                     }
                     .frame(maxWidth:.infinity, maxHeight:.infinity)
-                    .background(Color.blue)
-                    .foregroundColor(.white).cornerRadius(10)
+                    .background(themeManager.currentTheme.tint)
+                    .foregroundColor(themeManager.currentTheme.bubbleText).cornerRadius(10)
                 }
 
                 // SYNC
                 Button("5m") { compass.syncTimer(minutes: 5) }
                     .font(.system(size: geometry.size.height * 0.045, weight: .bold))
                     .frame(maxHeight:.infinity).padding(.horizontal, 8)
-                    .background(Color.gray.opacity(0.2)).cornerRadius(10)
+                    .background(themeManager.currentTheme.secondaryText.opacity(0.2)).cornerRadius(10)
+                    .foregroundColor(themeManager.currentTheme.primaryText)
 
                 Button("1m") { compass.syncTimer(minutes: 1) }
                     .font(.system(size: geometry.size.height * 0.045, weight: .bold))
                     .frame(maxHeight:.infinity).padding(.horizontal, 8)
-                    .background(Color.gray.opacity(0.2)).cornerRadius(10)
+                    .background(themeManager.currentTheme.secondaryText.opacity(0.2)).cornerRadius(10)
+                    .foregroundColor(themeManager.currentTheme.primaryText)
 
                 // BOAT - tap to GPS ping
                 Button(action: { compass.pingBoat() }) {
@@ -1052,8 +1094,8 @@ struct StartView: View {
                             .minimumScaleFactor(0.6)
                     }
                     .frame(maxWidth:.infinity, maxHeight:.infinity)
-                    .background(compass.boatEnd == nil ? Color.orange : Color.green)
-                    .foregroundColor(.white).cornerRadius(10)
+                    .background(compass.boatEnd == nil ? themeManager.currentTheme.warning : themeManager.currentTheme.positive)
+                    .foregroundColor(themeManager.currentTheme.bubbleText).cornerRadius(10)
                 }
             }
             .frame(height: geometry.size.height * 0.12)
