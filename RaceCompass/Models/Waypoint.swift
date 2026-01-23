@@ -23,7 +23,7 @@ struct AccelerationConfig: Codable {
     var reachingSpeedMultiplier: Double = 1.3  // reaching is typically 30% faster than upwind
     var buffer: Double = 3.0                // safety buffer (seconds)
 
-    /// Calculate target reach distance based on available time and recorded boat speed
+    /// Calculate target reach distance based on available time and target speed
     /// - Parameters:
     ///   - availableTime: seconds until start
     ///   - recordedUpwindSOG: measured upwind speed in knots (used to scale distances)
@@ -34,10 +34,8 @@ struct AccelerationConfig: Codable {
         let reachTime = availableTime - timeToAccelerate - buffer
         guard reachTime > 0 else { return 0 }
 
-        // Scale speeds based on recorded upwind performance
-        // Return speed ≈ upwind SOG (close-hauled approach)
-        // Reach speed ≈ upwind SOG × multiplier (beam reach is faster)
-        let returnSpeedKnots = max(1.0, recordedUpwindSOG)
+        // Use configured target speed for calculations
+        let returnSpeedKnots = max(1.0, targetSpeed)
         let reachSpeedKnots = returnSpeedKnots * reachingSpeedMultiplier
 
         let reachSpeedMS = reachSpeedKnots / 1.94384  // knots to m/s
@@ -47,6 +45,24 @@ struct AccelerationConfig: Codable {
         // So X = reachTime / (1/reachSpeed + 1/returnSpeed)
         let distance = reachTime / (1/reachSpeedMS + 1/returnSpeedMS) * 0.8  // 80% safety factor
         return max(0, distance)
+    }
+
+    /// Calculate total time needed for the reach maneuver (out + back + accel + buffer)
+    /// - Parameter distance: target reach distance in meters
+    /// - Returns: total seconds needed
+    func maneuverTime(forDistance distance: Double) -> Double {
+        guard distance > 0 else { return timeToAccelerate + buffer }
+
+        let returnSpeedKnots = max(1.0, targetSpeed)
+        let reachSpeedKnots = returnSpeedKnots * reachingSpeedMultiplier
+
+        let reachSpeedMS = reachSpeedKnots / 1.94384
+        let returnSpeedMS = returnSpeedKnots / 1.94384
+
+        let timeOut = distance / reachSpeedMS
+        let timeBack = distance / returnSpeedMS
+
+        return timeOut + timeBack + timeToAccelerate + buffer
     }
 }
 
