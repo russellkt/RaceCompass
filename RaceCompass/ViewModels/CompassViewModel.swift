@@ -18,6 +18,12 @@ class CompassViewModel: ObservableObject {
     @Published var heelAngle: Double = 0.0
     @Published var rawHeading: Double = 0.0
 
+    // --- TRUE NORTH HANDLING ---
+    @Published var headingIsTrueNorth: Bool = true
+    @Published var headingWarning: String? = nil
+    private var magneticDeclination: Double? = nil
+    private var sensorIsTrueNorth: Bool = false
+
     // --- WIND & LAYLINE ---
     @Published var starboardTackRef: Double? = nil
     @Published var portTackRef: Double? = nil
@@ -94,6 +100,13 @@ class CompassViewModel: ObservableObject {
             .assign(to: \.heelAngle, on: self)
             .store(in: &cancellables)
 
+        sensorService.$isReferenceFrameTrueNorth
+            .sink { [weak self] isTrueNorth in
+                self?.sensorIsTrueNorth = isTrueNorth
+                self?.updateHeadingReferenceState()
+            }
+            .store(in: &cancellables)
+
         // Location Updates
         locationService.$currentLocation
             .assign(to: \.currentLocation, on: self)
@@ -106,6 +119,30 @@ class CompassViewModel: ObservableObject {
         locationService.$cog
             .assign(to: \.cog, on: self)
             .store(in: &cancellables)
+
+        locationService.$magneticDeclination
+            .sink { [weak self] declination in
+                self?.magneticDeclination = declination
+                self?.updateHeadingReferenceState()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Updates the heading reference state and warning based on True North availability
+    private func updateHeadingReferenceState() {
+        if sensorIsTrueNorth {
+            // Best case: sensor provides True North directly
+            headingIsTrueNorth = true
+            headingWarning = nil
+        } else if magneticDeclination != nil {
+            // Good case: sensor is magnetic but we can convert using declination
+            headingIsTrueNorth = true
+            headingWarning = nil
+        } else {
+            // Warning case: magnetic heading without declination correction
+            headingIsTrueNorth = false
+            headingWarning = "Heading is Magnetic (no True North)"
+        }
     }
 
     // --- LOGIC (Refactored to use RaceComputer) ---
@@ -169,10 +206,20 @@ class CompassViewModel: ObservableObject {
     }
 
     // --- WIND LOGIC ---
-    func setStarboardTack() { starboardTackRef = rawHeading + calibrationOffset; calculateWindFromTacks() }
-    func setPortTack() { portTackRef = rawHeading + calibrationOffset; calculateWindFromTacks() }
+
+    /// Returns the corrected heading (True North) for calculations
+    private var correctedHeading: Double {
+        var heading = rawHeading
+        if !sensorIsTrueNorth, let declination = magneticDeclination {
+            heading += declination
+        }
+        return heading
+    }
+
+    func setStarboardTack() { starboardTackRef = correctedHeading + calibrationOffset; calculateWindFromTacks() }
+    func setPortTack() { portTackRef = correctedHeading + calibrationOffset; calculateWindFromTacks() }
     func setWindDirectly() {
-        let current = (rawHeading + calibrationOffset).truncatingRemainder(dividingBy: 360)
+        let current = (correctedHeading + calibrationOffset).truncatingRemainder(dividingBy: 360)
         trueWindDirection = current < 0 ? current + 360 : current
         starboardTackRef = nil; portTackRef = nil
     }
@@ -460,7 +507,13 @@ class CompassViewModel: ObservableObject {
     }
 
     func updateDisplay() {
-        var target = (rawHeading + calibrationOffset).truncatingRemainder(dividingBy: 360)
+        // Apply magnetic declination correction if sensor is magnetic and we have declination
+        var correctedHeading = rawHeading
+        if !sensorIsTrueNorth, let declination = magneticDeclination {
+            correctedHeading = rawHeading + declination
+        }
+
+        var target = (correctedHeading + calibrationOffset).truncatingRemainder(dividingBy: 360)
         if target < 0 { target += 360 }
         let diff = target - displayHeading
         let shortestDiff = (diff + 540).truncatingRemainder(dividingBy: 360) - 180

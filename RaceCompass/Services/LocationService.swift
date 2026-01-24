@@ -8,6 +8,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var currentLocation: CLLocation?
     @Published var sog: Double = 0.0 // Knots
     @Published var cog: Double = 0.0 // Degrees True
+    @Published var magneticDeclination: Double? = nil // Degrees (True - Magnetic)
 
     override init() {
         super.init()
@@ -18,10 +19,23 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func start() {
         locationManager.startUpdatingLocation()
+        locationManager.startUpdatingHeading()
     }
 
     func stop() {
         locationManager.stopUpdatingLocation()
+        locationManager.stopUpdatingHeading()
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        // Calculate magnetic declination from the difference between true and magnetic heading
+        if newHeading.trueHeading >= 0 && newHeading.magneticHeading >= 0 {
+            var declination = newHeading.trueHeading - newHeading.magneticHeading
+            // Normalize to -180 to 180
+            if declination > 180 { declination -= 360 }
+            if declination < -180 { declination += 360 }
+            self.magneticDeclination = declination
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
