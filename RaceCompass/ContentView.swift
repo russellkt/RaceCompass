@@ -392,9 +392,20 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             suggestedReachCourse = lineBearingPinToBoat
         }
 
-        // For Vanderbilt: boundary is time-based, not position-based
-        // We've gone far enough when it's time to turn back and sail close-hauled to line
-        pastBoundary = false  // Will be set by time-based logic below
+        // For Vanderbilt: check if past layline to the start line
+        // If bearing to line is "to the right" of close-hauled (on starboard), can't fetch
+        pastBoundary = false
+        if let stbdRef = starboardTackRef {
+            // Calculate how far "left" of close-hauled the bearing to line is
+            // Positive = lifted (target left of close-hauled, easy fetch)
+            // Negative = headed (target right of close-hauled, past layline)
+            var angleToFetch = bearingToLine - stbdRef
+            if angleToFetch < -180 { angleToFetch += 360 }
+            if angleToFetch > 180 { angleToFetch -= 360 }
+
+            // Past layline if bearing is more than 5° to the right of close-hauled
+            pastBoundary = angleToFetch < -5
+        }
 
         // Calculate key values
         let timeToLine = vmcToLine > 0.1 ? timeToLineVMC : Double.infinity
@@ -440,6 +451,14 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 startPhase = .build
                 startStrategy = "BUILD SPEED"
             }
+        } else if pastBoundary && isTargetLocked {
+            // === PAST LAYLINE - must turn back immediately ===
+            startPhase = .turnBack
+            if let stbdRef = starboardTackRef {
+                startStrategy = String(format: "LAYLINE! %03.0f°", stbdRef)
+            } else {
+                startStrategy = "LAYLINE!"
+            }
         } else if isTargetLocked && !isApproaching {
             // === VANDERBILT: TIME-BASED TURN BACK ===
             // Calculate time needed to sail close-hauled back to line from current position
@@ -457,9 +476,21 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     startStrategy = "TURN BACK"
                 }
             } else {
-                // Still in outbound reach phase
+                // Still in outbound reach phase - check if approaching layline
                 startPhase = .reachTo
-                startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
+                if let stbdRef = starboardTackRef {
+                    var angleToFetch = bearingToLine - stbdRef
+                    if angleToFetch < -180 { angleToFetch += 360 }
+                    if angleToFetch > 180 { angleToFetch -= 360 }
+                    // Warn if within 15° of layline
+                    if angleToFetch < 10 && angleToFetch > -5 {
+                        startStrategy = String(format: "REACH %03.0f° ⚠︎", suggestedReachCourse)
+                    } else {
+                        startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
+                    }
+                } else {
+                    startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
+                }
             }
         } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime {
             // === REACH PHASE - VANDERBILT: sail away on reciprocal of close-hauled ===
@@ -479,10 +510,9 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             startPhase = .hold
             startStrategy = String(format: "HOLD %.0fs", arrivalMargin)
         } else if isApproaching && arrivalMargin > 30 && distanceToLine < 50 {
-            // === APPROACHING TOO FAST - slow down (only during approach phase) ===
-            let targetSpeedKnots = max(1.0, distanceToLine / (secondsToStart - accelConfig.timeToAccelerate) * 1.94384)
+            // === APPROACHING TOO FAST - zigzag to kill time while maintaining momentum ===
             startPhase = .slowTo
-            startStrategy = String(format: "SLOW TO %.1fkt", targetSpeedKnots)
+            startStrategy = String(format: "S-TURN %.0fs", arrivalMargin)
         } else if secondsToStart > 150 {
             // === PREP PHASE - > 2.5 min, prep boat and crew ===
             startPhase = .hold
@@ -1028,7 +1058,7 @@ struct StartView: View {
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                         }
                         .foregroundColor(compass.sog >= compass.accelConfig.targetSpeed * 0.9 ? themeManager.currentTheme.bubbleText : themeManager.currentTheme.bubbleText.opacity(0.7))
-                    case .hold, .slowTo:
+                    case .hold:
                         // Show bearing to line when approaching
                         if compass.vmcToLine > 0.1 {
                             Text(String(format: "LINE %03.0f° • VMC %.1f kt", compass.bearingToLine, compass.vmcToLine))
@@ -1039,6 +1069,11 @@ struct StartView: View {
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                                 .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         }
+                    case .slowTo:
+                        // Suggest zigzag to kill time while maintaining momentum
+                        Text("ZIGZAG TO BURN TIME")
+                            .font(.system(size: geometry.size.height * 0.035, weight: .medium))
+                            .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                     case .reachTo:
                         // Show distance from line and return course
                         if let stbdRef = compass.starboardTackRef {
