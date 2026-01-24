@@ -110,24 +110,19 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// Record SOG when sailing close-hauled (within 15° of tack reference)
+    /// Only updates during final approach phases - baseline is set when tapping SET STB/PORT
     func recordUpwindSOGIfCloseHauled() {
+        // Only fine-tune speed during final phases (turnBack, build, go)
+        // Baseline speed is captured when setting tacks
+        guard startPhase == .turnBack || startPhase == .build || startPhase == .go else { return }
+
         guard sog > 0.5 else { return }  // Ignore very slow speeds
-        guard let wind = trueWindDirection else { return }
 
         // Check if current heading is close to either tack reference
         let currentHeading = displayHeading
         var isCloseHauled = false
 
-        // Calculate angle to wind
-        var angleToWind = abs(currentHeading - wind)
-        if angleToWind > 180 { angleToWind = 360 - angleToWind }
-
-        // Close-hauled is typically 35-55° from wind direction
-        if angleToWind >= 30 && angleToWind <= 60 {
-            isCloseHauled = true
-        }
-
-        // Alternative: check against tack references if set
+        // Check against tack references if set
         if let stbdRef = starboardTackRef {
             var diffStbd = abs(currentHeading - stbdRef)
             if diffStbd > 180 { diffStbd = 360 - diffStbd }
@@ -185,8 +180,24 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     
     // --- WIND LOGIC ---
-    func setStarboardTack() { starboardTackRef = rawHeading + calibrationOffset; calculateWindFromTacks() }
-    func setPortTack() { portTackRef = rawHeading + calibrationOffset; calculateWindFromTacks() }
+    func setStarboardTack() {
+        starboardTackRef = rawHeading + calibrationOffset
+        // Capture current speed as baseline upwind SOG (you're likely trimmed well when setting tack)
+        if sog > 1.0 {
+            recordedUpwindSOG = sog
+            upwindSOGSamples = [sog]  // Reset samples to current speed
+        }
+        calculateWindFromTacks()
+    }
+    func setPortTack() {
+        portTackRef = rawHeading + calibrationOffset
+        // Capture current speed as baseline upwind SOG (you're likely trimmed well when setting tack)
+        if sog > 1.0 {
+            recordedUpwindSOG = sog
+            upwindSOGSamples = [sog]  // Reset samples to current speed
+        }
+        calculateWindFromTacks()
+    }
     func setWindDirectly() {
         let current = (rawHeading + calibrationOffset).truncatingRemainder(dividingBy: 360)
         trueWindDirection = current < 0 ? current + 360 : current
