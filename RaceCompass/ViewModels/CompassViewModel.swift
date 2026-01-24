@@ -7,6 +7,7 @@ class CompassViewModel: ObservableObject {
     private let locationService = LocationService()
     private let sensorService = SensorService()
     private let timerService = TimerService()
+    private let startCoachService = StartCoachService()
     private var cancellables = Set<AnyCancellable>()
 
     // --- RACE DATA ---
@@ -46,8 +47,6 @@ class CompassViewModel: ObservableObject {
     @Published var startPhase: StartPhase = .setup
     @Published var targetReachDistance: Double = 0.0
     @Published var distanceAlongLine: Double = 0.0
-    private var isTargetLocked: Bool = false
-    private var reachStartPosition: CLLocation?
     @Published var suggestedReachCourse: Double = 0.0
     @Published var lineBias: Double = 0.0
     @Published var portApproachRecommended: Bool = false
@@ -301,150 +300,40 @@ class CompassViewModel: ObservableObject {
         }
     }
 
-    // This method is stateful and relies on many properties, so I'll keep it here but use RaceComputer for calculations
+    /// Delegates start phase determination to the StartCoachService.
+    /// This keeps the ViewModel thin while the service encapsulates all coaching logic.
     func determineStartPhase() {
-        let previousPhase = startPhase
+        let input = StartCoachInput(
+            secondsToStart: secondsToStart,
+            currentLocation: currentLocation,
+            boatEnd: boatEnd,
+            pinEnd: pinEnd,
+            vmcToLine: vmcToLine,
+            timeToLineVMC: timeToLineVMC,
+            distanceToLine: distanceToLine,
+            cog: cog,
+            sog: sog,
+            trueWindDirection: trueWindDirection,
+            recordedUpwindSOG: recordedUpwindSOG,
+            accelConfig: accelConfig
+        )
 
-        guard let boat = boatEnd, let pin = pinEnd else {
-            startPhase = .setup
-            startStrategy = "SET LINE"
-            return
-        }
+        let phaseChanged = startCoachService.update(with: input)
+        let output = startCoachService.output
 
-        if secondsToStart < -60 {
-            startPhase = .raceStarted
-            startStrategy = "RACE STARTED"
-            return
-        }
+        // Update published properties from service output
+        startPhase = output.startPhase
+        startStrategy = output.startStrategy
+        lineBias = output.lineBias
+        portApproachRecommended = output.portApproachRecommended
+        suggestedReachCourse = output.suggestedReachCourse
+        pastBoundary = output.pastBoundary
+        targetReachDistance = output.targetReachDistance
+        distanceAlongLine = output.distanceAlongLine
 
-        if let wind = trueWindDirection {
-            let bearingPinToWind = (wind - RaceComputer.bearing(from: pin, to: boat) + 360).truncatingRemainder(dividingBy: 360)
-            let bearingBoatToWind = (wind - RaceComputer.bearing(from: boat, to: pin) + 360).truncatingRemainder(dividingBy: 360)
-
-            let pinAngleToWind = bearingPinToWind > 180 ? bearingPinToWind - 360 : bearingPinToWind
-            let boatAngleToWind = bearingBoatToWind > 180 ? bearingBoatToWind - 360 : bearingBoatToWind
-
-            let lineLength = pin.distance(from: boat)
-            let angleDiff = abs(pinAngleToWind) - abs(boatAngleToWind)
-            lineBias = sin(angleDiff * .pi / 180) * lineLength
-            portApproachRecommended = lineBias > 10
-        } else {
-            lineBias = 0
-            portApproachRecommended = false
-        }
-
-        let lineBearingPinToBoat = RaceComputer.bearing(from: pin, to: boat)
-        let lineBearingBoatToPin = (lineBearingPinToBoat + 180).truncatingRemainder(dividingBy: 360)
-
-        if let loc = currentLocation {
-            let distToPin = loc.distance(from: pin)
-            let distToBoat = loc.distance(from: boat)
-
-            if portApproachRecommended {
-                suggestedReachCourse = lineBearingPinToBoat
-            } else {
-                suggestedReachCourse = distToPin < distToBoat ? lineBearingBoatToPin : lineBearingPinToBoat
-            }
-        } else {
-            suggestedReachCourse = lineBearingPinToBoat
-        }
-
-        pastBoundary = false
-        if let loc = currentLocation {
-            let bearingFromPin = RaceComputer.bearing(from: pin, to: loc)
-            let bearingFromBoat = RaceComputer.bearing(from: boat, to: loc)
-
-            var angleFromPinEnd = abs(bearingFromPin - lineBearingPinToBoat)
-            if angleFromPinEnd > 180 { angleFromPinEnd = 360 - angleFromPinEnd }
-
-            var angleFromBoatEnd = abs(bearingFromBoat - lineBearingBoatToPin)
-            if angleFromBoatEnd > 180 { angleFromBoatEnd = 360 - angleFromBoatEnd }
-
-            let reachingTowardBoat = abs(suggestedReachCourse - lineBearingPinToBoat) < 90
-            if reachingTowardBoat && angleFromPinEnd > 45 {
-                pastBoundary = true
-            } else if !reachingTowardBoat && angleFromBoatEnd > 45 {
-                pastBoundary = true
-            }
-        }
-
-        let timeToLine = vmcToLine > 0.1 ? timeToLineVMC : Double.infinity
-        let isApproaching = vmcToLine > 0.1
-
-        let arrivalMargin = secondsToStart - timeToLine
-
-        if !isTargetLocked {
-            targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
-        }
-
-        let maneuverTime = accelConfig.maneuverTime(forDistance: targetReachDistance)
-        let reachStartTime = maneuverTime + 10
-        let minApproachTime = accelConfig.timeToAccelerate + accelConfig.buffer + 20
-
-        if secondsToStart < 0 {
-            if distanceToLine > 5 {
-                startPhase = .late
-                startStrategy = String(format: "LATE %.0fs", abs(secondsToStart))
-            } else {
-                startPhase = .go
-                startStrategy = "GO!"
-            }
-        } else if secondsToStart <= accelConfig.timeToAccelerate + accelConfig.buffer {
-            if isApproaching && timeToLine < secondsToStart + 2 {
-                startPhase = .go
-                startStrategy = String(format: "GO! %.0fs", secondsToStart)
-            } else {
-                startPhase = .build
-                startStrategy = "BUILD SPEED"
-            }
-        } else if pastBoundary {
-            startPhase = .turnBack
-            startStrategy = "BOUNDARY"
-        } else if distanceAlongLine >= targetReachDistance * 0.9 && isTargetLocked {
-            startPhase = .turnBack
-            startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
-        } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime {
-            if previousPhase != .reachTo && previousPhase != .turnBack {
-                targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
-                reachStartPosition = currentLocation
-                isTargetLocked = true
-            }
-            if let startPos = reachStartPosition, let currentPos = currentLocation {
-                distanceAlongLine = startPos.distance(from: currentPos)
-            }
-            startPhase = .reachTo
-            let portIndicator = portApproachRecommended ? " P" : ""
-            startStrategy = String(format: "REACH %03.0f°%@", suggestedReachCourse, portIndicator)
-        } else if isApproaching && arrivalMargin < 0 {
-            startPhase = .build
-            startStrategy = "BUILD SPEED"
-        } else if isApproaching && arrivalMargin < accelConfig.timeToAccelerate {
-            startPhase = .hold
-            startStrategy = String(format: "HOLD %.0fs", arrivalMargin)
-        } else if isApproaching && arrivalMargin > 30 && distanceToLine < 50 {
-            let targetSpeedKnots = max(1.0, distanceToLine / (secondsToStart - accelConfig.timeToAccelerate) * Constants.metersPerSecondToKnots)
-            startPhase = .slowTo
-            startStrategy = String(format: "SLOW TO %.1fkt", targetSpeedKnots)
-        } else if secondsToStart > 150 {
-            startPhase = .hold
-            startStrategy = "PREP"
-        } else if isApproaching {
-            startPhase = .hold
-            startStrategy = String(format: "HOLD %.0fs", max(0, arrivalMargin))
-        } else {
-            startPhase = .hold
-            startStrategy = String(format: "HOLD %.0fs", max(0, secondsToStart - maneuverTime))
-        }
-
-        if startPhase != previousPhase {
+        // Trigger haptic feedback on phase change
+        if phaseChanged {
             HapticManager.shared.playPhaseChange()
-            if previousPhase == .reachTo || previousPhase == .turnBack {
-                if startPhase != .reachTo && startPhase != .turnBack {
-                    isTargetLocked = false
-                    reachStartPosition = nil
-                    distanceAlongLine = 0
-                }
-            }
         }
     }
 
