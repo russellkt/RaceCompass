@@ -421,7 +421,7 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         // Calculate time needed for reach maneuver at current target distance
-        let maneuverTime = accelConfig.maneuverTime(forDistance: targetReachDistance)
+        let maneuverTime = accelConfig.maneuverTime(forDistance: targetReachDistance, recordedUpwindSOG: recordedUpwindSOG)
 
         // Time thresholds based on sailing prestart sequence:
         // - > 150s: Prep phase, stay nearby
@@ -462,7 +462,9 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         } else if isTargetLocked && !isApproaching {
             // === VANDERBILT: TIME-BASED TURN BACK ===
             // Calculate time needed to sail close-hauled back to line from current position
-            let returnSpeedMS = max(1.0, accelConfig.targetSpeed) / 1.94384
+            // Use recorded upwind SOG if available (learned from sailing close-hauled), otherwise use config
+            let returnSpeedKnots = recordedUpwindSOG > 1.0 ? recordedUpwindSOG : accelConfig.targetSpeed
+            let returnSpeedMS = returnSpeedKnots / 1.94384
             let timeToReturn = distanceToLine / returnSpeedMS
             let timeNeededToReturn = timeToReturn + accelConfig.timeToAccelerate + accelConfig.buffer
 

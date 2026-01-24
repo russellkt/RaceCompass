@@ -23,10 +23,10 @@ struct AccelerationConfig: Codable {
     var reachingSpeedMultiplier: Double = 1.3  // reaching is typically 30% faster than upwind
     var buffer: Double = 3.0                // safety buffer (seconds)
 
-    /// Calculate target reach distance based on available time and target speed
+    /// Calculate target reach distance based on available time and recorded upwind speed
     /// - Parameters:
     ///   - availableTime: seconds until start
-    ///   - recordedUpwindSOG: measured upwind speed in knots (used to scale distances)
+    ///   - recordedUpwindSOG: measured upwind speed in knots (learned from sailing close-hauled)
     func targetReachDistance(availableTime: Double, recordedUpwindSOG: Double = 5.0) -> Double {
         guard availableTime > 0 else { return 0 }
 
@@ -34,8 +34,8 @@ struct AccelerationConfig: Codable {
         let reachTime = availableTime - timeToAccelerate - buffer
         guard reachTime > 0 else { return 0 }
 
-        // Use configured target speed for calculations
-        let returnSpeedKnots = max(1.0, targetSpeed)
+        // Use recorded upwind SOG if valid, otherwise fall back to configured target speed
+        let returnSpeedKnots = recordedUpwindSOG > 1.0 ? recordedUpwindSOG : max(1.0, targetSpeed)
         let reachSpeedKnots = returnSpeedKnots * reachingSpeedMultiplier
 
         let reachSpeedMS = reachSpeedKnots / 1.94384  // knots to m/s
@@ -48,12 +48,15 @@ struct AccelerationConfig: Codable {
     }
 
     /// Calculate total time needed for the reach maneuver (out + back + accel + buffer)
-    /// - Parameter distance: target reach distance in meters
+    /// - Parameters:
+    ///   - distance: target reach distance in meters
+    ///   - recordedUpwindSOG: measured upwind speed in knots (learned from sailing close-hauled)
     /// - Returns: total seconds needed
-    func maneuverTime(forDistance distance: Double) -> Double {
+    func maneuverTime(forDistance distance: Double, recordedUpwindSOG: Double = 5.0) -> Double {
         guard distance > 0 else { return timeToAccelerate + buffer }
 
-        let returnSpeedKnots = max(1.0, targetSpeed)
+        // Use recorded upwind SOG if valid, otherwise fall back to configured target speed
+        let returnSpeedKnots = recordedUpwindSOG > 1.0 ? recordedUpwindSOG : max(1.0, targetSpeed)
         let reachSpeedKnots = returnSpeedKnots * reachingSpeedMultiplier
 
         let reachSpeedMS = reachSpeedKnots / 1.94384
