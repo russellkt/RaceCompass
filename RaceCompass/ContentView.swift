@@ -1005,9 +1005,12 @@ struct StartView: View {
                     .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.045, weight: .bold))
 
-                Button("SET WIND") { compass.setWindDirectly() }
+                Button(action: { compass.setWindDirectly() }) {
+                    Text(compass.trueWindDirection != nil ? String(format: "WIND %03.0f°", compass.trueWindDirection!) : "SET WIND")
+                }
                     .padding(.vertical, 5).padding(.horizontal, 10)
-                    .background(themeManager.currentTheme.tint).cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
+                    .background(compass.trueWindDirection != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.tint)
+                    .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.045, weight: .bold))
             }
             .frame(height: geometry.size.height * 0.12)
