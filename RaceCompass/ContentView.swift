@@ -372,50 +372,29 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             portApproachRecommended = false
         }
 
-        // Calculate reach course - PARALLEL to the line
-        // The reach maneuver sails along the line extension, not perpendicular to it
-        let lineBearingPinToBoat = bearing(from: pin, to: boat)
-        let lineBearingBoatToPin = (lineBearingPinToBoat + 180).truncatingRemainder(dividingBy: 360)
+        // Calculate reach course - VANDERBILT APPROACH
+        // Sail away on reciprocal of close-hauled, then return close-hauled on starboard
+        // This is simpler timing: sail directly away from where you want to be, then back
 
-        if let loc = currentLocation {
-            // Choose direction based on which end is closer (reach away from closer end)
-            let distToPin = loc.distance(from: pin)
-            let distToBoat = loc.distance(from: boat)
-
-            if portApproachRecommended {
-                // Pin is favored - reach toward boat end, return toward pin
-                suggestedReachCourse = lineBearingPinToBoat
-            } else {
-                // Standard: reach away from closer end
-                suggestedReachCourse = distToPin < distToBoat ? lineBearingBoatToPin : lineBearingPinToBoat
-            }
+        if let stbdRef = starboardTackRef {
+            // Use recorded starboard tack heading - reciprocal for outbound
+            var outbound = stbdRef + 180
+            if outbound >= 360 { outbound -= 360 }
+            suggestedReachCourse = outbound
+        } else if let wind = trueWindDirection {
+            // Estimate: outbound is wind + 135° (broad reach away)
+            var outbound = wind + 135
+            if outbound >= 360 { outbound -= 360 }
+            suggestedReachCourse = outbound
         } else {
+            // Fallback: use line bearing (old behavior)
+            let lineBearingPinToBoat = bearing(from: pin, to: boat)
             suggestedReachCourse = lineBearingPinToBoat
         }
 
-        // Check 45° boundary - don't sail too far past line ends
-        // On starboard tack (reaching toward boat end): don't go past 45° from pin
-        // On port tack (reaching toward pin end): don't go past 45° from boat
-        pastBoundary = false
-        if let loc = currentLocation {
-            let bearingFromPin = bearing(from: pin, to: loc)
-            let bearingFromBoat = bearing(from: boat, to: loc)
-
-            // Angle from line extended past each end
-            var angleFromPinEnd = abs(bearingFromPin - lineBearingPinToBoat)
-            if angleFromPinEnd > 180 { angleFromPinEnd = 360 - angleFromPinEnd }
-
-            var angleFromBoatEnd = abs(bearingFromBoat - lineBearingBoatToPin)
-            if angleFromBoatEnd > 180 { angleFromBoatEnd = 360 - angleFromBoatEnd }
-
-            // If reaching toward boat end and past 45° from pin, or vice versa
-            let reachingTowardBoat = abs(suggestedReachCourse - lineBearingPinToBoat) < 90
-            if reachingTowardBoat && angleFromPinEnd > 45 {
-                pastBoundary = true
-            } else if !reachingTowardBoat && angleFromBoatEnd > 45 {
-                pastBoundary = true
-            }
-        }
+        // For Vanderbilt: boundary is time-based, not position-based
+        // We've gone far enough when it's time to turn back and sail close-hauled to line
+        pastBoundary = false  // Will be set by time-based logic below
 
         // Calculate key values
         let timeToLine = vmcToLine > 0.1 ? timeToLineVMC : Double.infinity
@@ -461,30 +440,36 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 startPhase = .build
                 startStrategy = "BUILD SPEED"
             }
-        } else if pastBoundary {
-            // === PAST 45° BOUNDARY - must turn back ===
-            startPhase = .turnBack
-            startStrategy = "BOUNDARY"
-        } else if distanceAlongLine >= targetReachDistance * 0.9 && isTargetLocked {
-            // === REACHED TARGET DISTANCE along line - turn back ===
-            startPhase = .turnBack
-            startStrategy = portApproachRecommended ? "TURN→PORT" : "TURN BACK"
+        } else if isTargetLocked && !isApproaching {
+            // === VANDERBILT: TIME-BASED TURN BACK ===
+            // Calculate time needed to sail close-hauled back to line from current position
+            let returnSpeedMS = max(1.0, accelConfig.targetSpeed) / 1.94384
+            let timeToReturn = distanceToLine / returnSpeedMS
+            let timeNeededToReturn = timeToReturn + accelConfig.timeToAccelerate + accelConfig.buffer
+
+            if secondsToStart <= timeNeededToReturn {
+                // Time to turn back and sail close-hauled to line
+                startPhase = .turnBack
+                // Show the close-hauled course to steer back
+                if let stbdRef = starboardTackRef {
+                    startStrategy = String(format: "TACK %03.0f°", stbdRef)
+                } else {
+                    startStrategy = "TURN BACK"
+                }
+            } else {
+                // Still in outbound reach phase
+                startPhase = .reachTo
+                startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
+            }
         } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime {
-            // === REACH PHASE - time to start maneuver, sail parallel to line ===
-            // Triggers around 140s with typical settings (maneuverTime ~130s + 10s margin)
-            // Lock the target distance and record start position when entering REACH phase
+            // === REACH PHASE - VANDERBILT: sail away on reciprocal of close-hauled ===
+            // Lock when entering reach phase
             if previousPhase != .reachTo && previousPhase != .turnBack {
-                targetReachDistance = accelConfig.targetReachDistance(availableTime: secondsToStart, recordedUpwindSOG: recordedUpwindSOG)
                 reachStartPosition = currentLocation
                 isTargetLocked = true
             }
-            // Calculate distance traveled along line from reach start
-            if let startPos = reachStartPosition, let currentPos = currentLocation {
-                distanceAlongLine = startPos.distance(from: currentPos)
-            }
             startPhase = .reachTo
-            let portIndicator = portApproachRecommended ? " P" : ""
-            startStrategy = String(format: "REACH %03.0f°%@", suggestedReachCourse, portIndicator)
+            startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
         } else if isApproaching && arrivalMargin < 0 {
             // === APPROACHING BUT LATE - need more speed ===
             startPhase = .build
@@ -974,22 +959,26 @@ struct StartView: View {
             
             // 1. WIND SETUP (12% Height)
             HStack(spacing: 10) {
-                Button("SET STB") { compass.setStarboardTack() }
+                Button(action: { compass.setStarboardTack() }) {
+                    Text(compass.starboardTackRef != nil ? String(format: "STB %03.0f°", compass.starboardTackRef!) : "SET STB")
+                }
                     .padding(.vertical, 5).padding(.horizontal, 10)
                     .background(compass.starboardTackRef != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
                     .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
-                    .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                
-                Button("SET PORT") { compass.setPortTack() }
+                    .font(.system(size: geometry.size.height * 0.045, weight: .bold))
+
+                Button(action: { compass.setPortTack() }) {
+                    Text(compass.portTackRef != nil ? String(format: "PORT %03.0f°", compass.portTackRef!) : "SET PORT")
+                }
                     .padding(.vertical, 5).padding(.horizontal, 10)
                     .background(compass.portTackRef != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
                     .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
-                    .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                
+                    .font(.system(size: geometry.size.height * 0.045, weight: .bold))
+
                 Button("SET WIND") { compass.setWindDirectly() }
                     .padding(.vertical, 5).padding(.horizontal, 10)
                     .background(themeManager.currentTheme.tint).cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
-                    .font(.system(size: geometry.size.height * 0.05, weight: .bold))
+                    .font(.system(size: geometry.size.height * 0.045, weight: .bold))
             }
             .frame(height: geometry.size.height * 0.12)
             .frame(maxWidth: .infinity)
@@ -1051,20 +1040,27 @@ struct StartView: View {
                                 .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         }
                     case .reachTo:
-                        if compass.portApproachRecommended {
-                            Text(String(format: "PIN +%.0fm • PORT APPROACH", compass.lineBias))
-                                .font(.system(size: geometry.size.height * 0.032, weight: .medium))
+                        // Show distance from line and return course
+                        if let stbdRef = compass.starboardTackRef {
+                            Text(String(format: "%.0fm • RETURN %03.0f°", compass.distanceToLine, stbdRef))
+                                .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                                 .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         } else {
-                            Text(String(format: "%.0fm / %.0fm", compass.distanceAlongLine, compass.targetReachDistance))
+                            Text(String(format: "%.0fm FROM LINE", compass.distanceToLine))
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                                 .foregroundColor(themeManager.currentTheme.bubbleText.opacity(0.9))
                         }
                     case .turnBack:
-                        // Show bearing to line prominently when turning back
-                        Text(String(format: "STEER %03.0f° TO LINE", compass.bearingToLine))
-                            .font(.system(size: geometry.size.height * 0.04, weight: .bold))
-                            .foregroundColor(themeManager.currentTheme.bubbleText)
+                        // Show the close-hauled course to steer back
+                        if let stbdRef = compass.starboardTackRef {
+                            Text(String(format: "CLOSE-HAULED %03.0f°", stbdRef))
+                                .font(.system(size: geometry.size.height * 0.04, weight: .bold))
+                                .foregroundColor(themeManager.currentTheme.bubbleText)
+                        } else {
+                            Text(String(format: "STEER %03.0f° TO LINE", compass.bearingToLine))
+                                .font(.system(size: geometry.size.height * 0.04, weight: .bold))
+                                .foregroundColor(themeManager.currentTheme.bubbleText)
+                        }
                     default:
                         EmptyView()
                     }
