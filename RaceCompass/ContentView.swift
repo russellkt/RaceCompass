@@ -202,9 +202,16 @@ struct RaceView: View {
                     .minimumScaleFactor(0.3)
                     .lineLimit(1)
 
-                Text("HDG")
-                    .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                    .foregroundColor(themeManager.currentTheme.secondaryText)
+                HStack(spacing: 4) {
+                    Text("HDG")
+                        .font(.system(size: geometry.size.height * 0.05, weight: .bold))
+                        .foregroundColor(themeManager.currentTheme.secondaryText)
+                    if compass.headingWarning != nil {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: geometry.size.height * 0.04))
+                            .foregroundColor(themeManager.currentTheme.warning)
+                    }
+                }
 
                 Spacer()
 
@@ -353,17 +360,24 @@ struct StartView: View {
                     .background(compass.starboardTackRef != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
                     .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                
+
                 Button("SET PORT") { compass.setPortTack() }
                     .padding(.vertical, 5).padding(.horizontal, 10)
                     .background(compass.portTackRef != nil ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
                     .cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
-                
+
                 Button("SET WIND") { compass.setWindDirectly() }
                     .padding(.vertical, 5).padding(.horizontal, 10)
                     .background(themeManager.currentTheme.tint).cornerRadius(8).foregroundColor(themeManager.currentTheme.bubbleText)
                     .font(.system(size: geometry.size.height * 0.05, weight: .bold))
+
+                // Warning if heading is magnetic without declination
+                if compass.headingWarning != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: geometry.size.height * 0.05))
+                        .foregroundColor(themeManager.currentTheme.warning)
+                }
             }
             .frame(height: geometry.size.height * 0.12)
             .frame(maxWidth: .infinity)
