@@ -505,6 +505,11 @@ class CompassViewModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     startStrategy = String(format: "REACH %03.0f°", suggestedReachCourse)
                 }
             }
+        } else if isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime && !isTargetLocked {
+            // === BEAR AWAY PROMPT - time to start Vanderbilt but still approaching line ===
+            // Tell user to bear away to start the reach-out maneuver
+            startPhase = .reachTo
+            startStrategy = String(format: "BEAR AWAY %03.0f°", suggestedReachCourse)
         } else if !isApproaching && secondsToStart <= reachStartTime && secondsToStart > minApproachTime {
             // === REACH PHASE - VANDERBILT: sail away on reciprocal of close-hauled ===
             // Lock when entering reach phase
@@ -1064,16 +1069,16 @@ struct StartView: View {
                 Group {
                     switch compass.startPhase {
                     case .build, .go:
-                        // Show speed gauge during acceleration phases
+                        // Show speed gauge during acceleration phases (target is recorded upwind speed)
                         HStack(spacing: 8) {
                             Text(String(format: "%.1f", compass.sog))
                                 .font(.system(size: geometry.size.height * 0.04, weight: .bold, design: .monospaced))
                             Text("/")
                                 .font(.system(size: geometry.size.height * 0.03))
-                            Text(String(format: "%.1f kt", compass.accelConfig.targetSpeed))
+                            Text(String(format: "%.1f kt", compass.recordedUpwindSOG))
                                 .font(.system(size: geometry.size.height * 0.035, weight: .medium))
                         }
-                        .foregroundColor(compass.sog >= compass.accelConfig.targetSpeed * 0.9 ? themeManager.currentTheme.bubbleText : themeManager.currentTheme.bubbleText.opacity(0.7))
+                        .foregroundColor(compass.sog >= compass.recordedUpwindSOG * 0.9 ? themeManager.currentTheme.bubbleText : themeManager.currentTheme.bubbleText.opacity(0.7))
                     case .hold:
                         // Show bearing to line when approaching
                         if compass.vmcToLine > 0.1 {
