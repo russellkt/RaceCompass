@@ -59,10 +59,10 @@ struct SettingsView: View {
                 // AUDIO/HAPTICS
                 Section(header: Text("FEEDBACK")) {
                     Toggle("Haptic Feedback", isOn: $hapticsEnabled)
-                        .onChange(of: hapticsEnabled) {
+                        .onChange(of: hapticsEnabled) { newValue in
                             // Sync to HapticManager (both use same UserDefaults key,
                             // but HapticManager caches the value for performance)
-                            HapticManager.shared.isEnabled = hapticsEnabled
+                            HapticManager.shared.isEnabled = newValue
                         }
                 }
 
