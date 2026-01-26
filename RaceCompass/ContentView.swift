@@ -294,10 +294,18 @@ struct StartView: View {
         return "STBD"
     }
 
-    // Convert Remaining Seconds to MM:SS
+    // Convert Remaining Seconds to MM:SS (countdown)
     func timeString(seconds: Double) -> String {
         let totalSeconds = Int(ceil(seconds)) // Round up so 0.9s shows as 1s
         if totalSeconds <= 0 { return "0:00" }
+        let m = totalSeconds / 60
+        let s = totalSeconds % 60
+        return String(format: "%d:%02d", m, s)
+    }
+
+    // Convert Elapsed Seconds to MM:SS (count up)
+    func elapsedTimeString(seconds: Double) -> String {
+        let totalSeconds = Int(seconds)
         let m = totalSeconds / 60
         let s = totalSeconds % 60
         return String(format: "%d:%02d", m, s)
@@ -396,13 +404,35 @@ struct StartView: View {
             }
             .frame(height: geometry.size.height * 0.12)
             
-            // 3. COUNTDOWN TIMER (25% Height)
-            Text(timeString(seconds: compass.secondsToStart))
-                .font(.system(size: geometry.size.height * 0.25, weight: .black, design: .monospaced))
-                .foregroundColor(compass.secondsToStart < 60 ? themeManager.currentTheme.negative : themeManager.currentTheme.primaryText)
-                .minimumScaleFactor(0.5)
-                .lineLimit(1)
+            // 3. COUNTDOWN / RACE TIMER (25% Height)
+            if compass.secondsToStart > 0 {
+                // Countdown to start
+                Text(timeString(seconds: compass.secondsToStart))
+                    .font(.system(size: geometry.size.height * 0.25, weight: .black, design: .monospaced))
+                    .foregroundColor(compass.secondsToStart < 60 ? themeManager.currentTheme.negative : themeManager.currentTheme.primaryText)
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+                    .frame(height: geometry.size.height * 0.25)
+            } else {
+                // Race elapsed timer with stop/start
+                HStack(spacing: 15) {
+                    Text(elapsedTimeString(seconds: compass.raceElapsedTime))
+                        .font(.system(size: geometry.size.height * 0.22, weight: .black, design: .monospaced))
+                        .foregroundColor(compass.isRaceTimerRunning ? themeManager.currentTheme.positive : themeManager.currentTheme.warning)
+                        .minimumScaleFactor(0.5)
+                        .lineLimit(1)
+
+                    Button(action: { compass.toggleRaceTimer() }) {
+                        Image(systemName: compass.isRaceTimerRunning ? "pause.fill" : "play.fill")
+                            .font(.system(size: geometry.size.height * 0.08, weight: .bold))
+                            .foregroundColor(themeManager.currentTheme.bubbleText)
+                            .frame(width: geometry.size.height * 0.12, height: geometry.size.height * 0.12)
+                            .background(themeManager.currentTheme.tint)
+                            .cornerRadius(8)
+                    }
+                }
                 .frame(height: geometry.size.height * 0.25)
+            }
             
             // 4. COACH MESSAGE (16% Height) - Enhanced two-line display
             VStack(spacing: 2) {

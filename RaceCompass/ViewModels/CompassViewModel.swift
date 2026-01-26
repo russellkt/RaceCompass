@@ -65,6 +65,11 @@ class CompassViewModel: ObservableObject {
     @Published var secondsToStart: TimeInterval = 0.0
     @Published var isTimerRunning = false
 
+    // --- RACE ELAPSED TIMER ---
+    @Published var raceElapsedTime: TimeInterval = 0.0
+    @Published var isRaceTimerRunning = true
+    private var raceTimerPausedAt: TimeInterval? = nil
+
     var currentLocation: CLLocation?
 
     init() {
@@ -155,6 +160,17 @@ class CompassViewModel: ObservableObject {
              HapticManager.shared.playGun()
         }
 
+        // Update race elapsed timer after start
+        if secondsToStart < 0 {
+            if isRaceTimerRunning {
+                raceElapsedTime = abs(secondsToStart)
+            }
+            // If paused, raceElapsedTime stays at the paused value
+        } else {
+            raceElapsedTime = 0
+            raceTimerPausedAt = nil
+        }
+
         if secondsToStart > -60 {
             calculateLineStats()
             calculateLaylineStats()
@@ -168,6 +184,20 @@ class CompassViewModel: ObservableObject {
 
         calculateVMC()
         recordUpwindSOGIfCloseHauled()
+    }
+
+    func toggleRaceTimer() {
+        if isRaceTimerRunning {
+            // Pause: store current elapsed time
+            raceTimerPausedAt = raceElapsedTime
+            isRaceTimerRunning = false
+        } else {
+            // Resume: adjust target time so elapsed continues from paused value
+            if let pausedAt = raceTimerPausedAt {
+                targetTime = Date().addingTimeInterval(-pausedAt)
+            }
+            isRaceTimerRunning = true
+        }
     }
 
     func recordUpwindSOGIfCloseHauled() {
