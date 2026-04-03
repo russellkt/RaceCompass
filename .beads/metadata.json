@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "RaceCompass",
+  "project_id": "db334460-05b1-496d-bda2-173f620f1b87"
+}

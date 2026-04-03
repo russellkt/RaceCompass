@@ -3,3 +3,8 @@ reference/
 
 # Xcode user-specific settings
 xcuserdata/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
