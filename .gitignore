@@ -1,2 +1,5 @@
 # Copyrighted reference materials (kept locally, not published)
 reference/
+
+# Xcode user-specific settings
+xcuserdata/
