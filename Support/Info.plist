@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Garmin Connect Mobile returns the selected-device list via this scheme -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.ktronline.RaceCompass.ciq</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>racecompass-ciq</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Lets the ConnectIQ SDK check whether Garmin Connect Mobile is installed -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>gcm-ciq</string>
+	</array>
+</dict>
+</plist>

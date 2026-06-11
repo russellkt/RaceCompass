@@ -8,6 +8,7 @@ struct ContentView: View {
     @StateObject var compass = CompassViewModel()
     @StateObject var waypointStore = WaypointStore()
     @EnvironmentObject var themeManager: ThemeManager
+    @EnvironmentObject var watchRemote: WatchRemoteService
     @State private var startDragOffset: Double = 0.0
     @State private var mode: AppMode = .start
     @State private var showingCourseSetup = false
@@ -61,7 +62,10 @@ struct ContentView: View {
                     else { StartView(compass: compass, waypointStore: waypointStore, showingCourseSetup: $showingCourseSetup, geometry: geometry) }
                 }
             }
-            .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+            .onAppear {
+                UIApplication.shared.isIdleTimerDisabled = true
+                watchRemote.attach(compass)
+            }
             .statusBar(hidden: true)
             .persistentSystemOverlays(.hidden)
             .preferredColorScheme(themeManager.currentTheme.name == "Night" ? .dark : .light)

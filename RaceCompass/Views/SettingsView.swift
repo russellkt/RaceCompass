@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var themeManager: ThemeManager
     @ObservedObject var waypointStore: WaypointStore
+    @EnvironmentObject var watchRemote: WatchRemoteService
     @Binding var isPresented: Bool
 
     // Use shared key from HapticManager to avoid mismatch
@@ -64,6 +65,22 @@ struct SettingsView: View {
                             // but HapticManager caches the value for performance)
                             HapticManager.shared.isEnabled = newValue
                         }
+                }
+
+                // GARMIN WATCH COMPANION
+                Section(header: Text("GARMIN WATCH"), footer: Text("Requires the Garmin Connect app and the RaceCompass watch app installed on the watch.")) {
+                    HStack {
+                        Text("Watch")
+                        Spacer()
+                        Text(watchRemote.deviceName ?? "Not paired")
+                            .foregroundColor(.secondary)
+                        Circle()
+                            .fill(watchRemote.isConnected ? Color.green : Color.red)
+                            .frame(width: 10, height: 10)
+                    }
+                    Button("Connect Garmin Watch") {
+                        watchRemote.connectWatch()
+                    }
                 }
 
                 Section(footer: Text("RaceCompass v1.1")) {
