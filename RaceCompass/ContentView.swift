@@ -69,7 +69,7 @@ struct ContentView: View {
             .statusBar(hidden: true)
             .persistentSystemOverlays(.hidden)
             .preferredColorScheme(themeManager.currentTheme.name == "Night" ? .dark : .light)
-            .id(geometry.size)
+            .id("\(geometry.size.width)x\(geometry.size.height)")
             .gesture(DragGesture().onChanged { gesture in
                 if mode == .race {
                     if !compass.isDragging { compass.isDragging = true; startDragOffset = compass.calibrationOffset }

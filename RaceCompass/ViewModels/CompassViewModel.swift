@@ -255,7 +255,7 @@ class CompassViewModel: ObservableObject {
 
     func calculateWindFromTacks() {
         guard let s = starboardTackRef, let p = portTackRef else { return }
-        var diff = abs(s - p)
+        let diff = abs(s - p)
         var wind: Double
         if diff < 180 { wind = (s + p) / 2 } else { wind = (s + p + 360) / 2 }
         wind = wind.truncatingRemainder(dividingBy: 360)
