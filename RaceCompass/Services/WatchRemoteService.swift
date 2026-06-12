@@ -22,6 +22,7 @@ final class WatchRemoteService: NSObject, ObservableObject {
     private weak var compass: CompassViewModel?
     private var devices: [IQDevice] = []
     private var apps: [IQApp] = []
+    private var statuses: [UUID: IQDeviceStatus] = [:]
     private var pushTimer: AnyCancellable?
     private var lastLaylineZone = 0
 
@@ -61,7 +62,7 @@ final class WatchRemoteService: NSObject, ObservableObject {
             "ttl": Int(compass.timeToLayline),
         ]
         if let vibe = laylineVibe(compass) { msg["vibe"] = vibe }
-        for app in apps {
+        for (device, app) in zip(devices, apps) where statuses[device.uuid] == .connected {
             ConnectIQ.sharedInstance().sendMessage(msg, to: app, progress: nil) { _ in }
         }
     }
@@ -109,6 +110,7 @@ final class WatchRemoteService: NSObject, ObservableObject {
         guard let ciq = ConnectIQ.sharedInstance() else { return }
         ciq.unregister(forAllDeviceEvents: self)
         ciq.unregister(forAllAppMessages: self)
+        statuses = [:]
         devices = list
         apps = list.map { device in
             ciq.register(forDeviceEvents: device, delegate: self)
@@ -137,9 +139,14 @@ final class WatchRemoteService: NSObject, ObservableObject {
 }
 
 extension WatchRemoteService: IQDeviceEventDelegate {
+    // Multiple watches may be registered (GCM returns every paired device);
+    // track each one so an offline watch can't mask a connected one.
     func deviceStatusChanged(_ device: IQDevice, status: IQDeviceStatus) {
-        isConnected = (status == .connected)
-        if status != .connected { lastLaylineZone = 0 }
+        statuses[device.uuid] = status
+        let connected = devices.first { statuses[$0.uuid] == .connected }
+        isConnected = connected != nil
+        deviceName = (connected ?? devices.first)?.friendlyName
+        if !isConnected { lastLaylineZone = 0 }
     }
 }
 
